@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SMS Center</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0b1020;--panel:#121a2d;--panel2:#182238;--line:#27334d;--text:#ecf2ff;--muted:#91a0bd;--accent:#5eead4;--blue:#60a5fa;--red:#fb7185;--amber:#fbbf24;--green:#34d399}
+    *{box-sizing:border-box} html{min-width:0}body{min-width:0;margin:0;overflow-x:hidden;background:radial-gradient(circle at 20% -10%,#18345a 0,transparent 38%),var(--bg);font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--text)}
+    button,input,select,textarea{font:inherit}.shell{max-width:1480px;margin:auto;padding:28px}.top{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:22px}.brand{display:flex;align-items:center;gap:14px}.logo{display:grid;place-items:center;width:46px;height:46px;border:1px solid #55e6d0;border-radius:15px;background:#16363a;color:var(--accent);font-weight:800}.brand h1{font-size:22px;margin:0}.brand p{margin:2px 0 0;color:var(--muted)}
+    .actions,.tabs{display:flex;gap:9px;flex-wrap:wrap}.btn{border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:9px 13px;border-radius:10px;cursor:pointer}.btn:hover{border-color:#607293}.btn.primary{background:var(--accent);border-color:var(--accent);color:#042f2e;font-weight:700}.btn.danger{color:#fecdd3}.tab.active{background:#22395e;border-color:#4e77b4}
+    .stats{display:grid;grid-template-columns:repeat(5,minmax(140px,1fr));gap:12px;margin:18px 0}.stat,.card{background:linear-gradient(160deg,rgba(24,34,56,.97),rgba(15,23,42,.97));border:1px solid var(--line);border-radius:16px;box-shadow:0 15px 45px rgba(0,0,0,.15)}.stat{padding:16px}.stat b{font-size:26px;display:block}.stat span{color:var(--muted)}
+    .card{padding:18px;margin-top:14px}.card h2{font-size:16px;margin:0 0 14px}.table-wrap{max-width:100%;overflow:auto;border:1px solid var(--line);border-radius:12px;-webkit-overflow-scrolling:touch}table{width:100%;border-collapse:collapse;min-width:820px}th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}th{position:sticky;top:0;background:#172139;color:#aebbd3;font-size:12px;text-transform:uppercase;letter-spacing:.04em}tr:last-child td{border-bottom:0}.muted{color:var(--muted)}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;overflow-wrap:anywhere}.body-cell{max-width:520px;white-space:pre-wrap;word-break:break-word}
+    .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:999px;background:#26334a;color:#cbd5e1;font-size:12px}.pill.online,.pill.delivered,.pill.sent{background:#123d34;color:#86efac}.pill.retry,.pill.partial,.pill.pending,.pill.sending,.pill.unknown{background:#4a3817;color:#fde68a}.pill.failed,.pill.offline{background:#4b1f2c;color:#fda4af}.dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+    .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.grid2>.card{min-width:0}.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.field{display:flex;min-width:0;flex-direction:column;gap:5px}.field.full{grid-column:1/-1}.field label{color:#aebbd3;font-size:12px}.field input,.field select,.field textarea{width:100%;border:1px solid var(--line);border-radius:9px;background:#0e1729;color:var(--text);padding:10px}.field select[multiple]{min-height:148px}.field textarea{min-height:80px;resize:vertical}.empty{padding:34px;text-align:center;color:var(--muted)}.hint{margin:-6px 0 14px;color:var(--muted);font-size:12px}.tag-list{display:flex;flex-wrap:wrap;gap:5px}.tag{display:inline-flex;padding:2px 7px;border:1px solid var(--line);border-radius:999px;background:#172139;color:#cbd5e1;font-size:12px}details summary{cursor:pointer;color:#aebbd3;font-weight:700}
+    .page{display:none}.page.active{display:block}.login{position:fixed;inset:0;display:none;place-items:center;background:rgba(4,9,20,.88);backdrop-filter:blur(10px);z-index:20}.login.show{display:grid}.login-box{width:min(420px,calc(100vw - 32px));padding:26px;background:var(--panel);border:1px solid var(--line);border-radius:18px}.login-box h2{font-size:18px;margin:0 0 6px}.login-box p{color:var(--muted);margin:0 0 18px}.login-box input{width:100%;margin-bottom:12px;border:1px solid var(--line);border-radius:10px;background:#0b1425;color:white;padding:12px}.toast{position:fixed;right:22px;bottom:22px;max-width:420px;background:#18243b;border:1px solid #405377;border-radius:12px;padding:12px 15px;display:none;z-index:30}.toast.show{display:block}.right{text-align:right}.small{font-size:12px}.hidden{display:none!important}.secret-box{padding:14px;border:1px solid #41617e;border-radius:12px;background:#0d1d31}.secret-box textarea{width:100%;min-height:88px;margin:8px 0;border:1px solid var(--line);border-radius:9px;background:#07111f;color:#a7f3d0;padding:10px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;word-break:break-all}
+    .template-preview{min-height:86px;margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:#cbd5e1}.placeholder-bar{display:flex;flex-wrap:wrap;gap:7px;margin-top:3px}.placeholder-bar .btn{padding:6px 9px}
+    .notification-settings{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}.check-list{display:flex;gap:16px;flex-wrap:wrap}.check{display:inline-flex;align-items:center;gap:7px;color:#cbd5e1}.check input{width:auto;min-height:0;accent-color:var(--accent)}
+    @media(max-width:900px){.shell{padding:16px}.top{align-items:flex-start;flex-direction:column}.stats{grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}.stats .stat{grid-column:span 2;padding:14px}.stats .stat:nth-last-child(-n+2){grid-column:span 3}.grid2,.form-grid{grid-template-columns:1fr}.field.full{grid-column:auto}}
+    @media(max-width:640px){
+      .shell{padding:12px max(12px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left))}
+      .top{gap:12px;margin-bottom:10px}.brand{align-items:flex-start;gap:10px}.logo{width:40px;height:40px;border-radius:12px;flex:0 0 auto}.brand h1{font-size:20px}.brand p{font-size:12px;line-height:1.35}
+      .top>.actions{width:100%;flex-wrap:nowrap}.top>.actions .btn{flex:1;min-height:44px}
+      .tabs{position:sticky;z-index:10;top:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin:0 -12px;padding:8px 12px;background:rgba(11,16,32,.94);border-block:1px solid rgba(39,51,77,.8);backdrop-filter:blur(12px)}.tabs .btn{min-width:0;min-height:42px;padding:8px 6px;white-space:nowrap}
+      .stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0}.stats .stat,.stats .stat:nth-last-child(-n+2){grid-column:auto;padding:12px}.stats .stat:last-child:nth-child(odd){grid-column:1/-1}.stat b{font-size:22px}
+      .grid2{gap:0}.card{padding:14px;margin-top:10px;border-radius:14px}.card h2{margin-bottom:12px}
+      .form-grid{gap:10px}.field input,.field select,.field textarea{min-height:44px;padding:10px;font-size:16px}.field select[multiple]{min-height:148px}.actions{gap:8px}.field>.actions{width:100%}.field>.actions input{min-width:0;flex:1 1 100%}.field>.actions .btn{min-height:42px}
+      .table-wrap{overflow:visible;border:0;border-radius:0}table,tbody{display:block;width:100%;min-width:0}thead{display:none}tr{display:block;margin-bottom:10px;padding:7px 11px;background:#111b2f;border:1px solid var(--line);border-radius:12px}tr:last-child{margin-bottom:0}td,td:last-child{display:grid;grid-template-columns:minmax(88px,34%) minmax(0,1fr);gap:8px;width:100%;padding:8px 0;border-bottom:1px solid rgba(39,51,77,.75);overflow-wrap:anywhere}td:last-child{border-bottom:0}td::before{content:attr(data-label);color:#91a0bd;font:11px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;text-transform:uppercase;letter-spacing:.035em}.body-cell{max-width:none}.table-wrap .btn{min-height:40px}
+      .secret-box{padding:12px}.secret-box textarea{font-size:14px}.toast{right:12px;bottom:max(12px,env(safe-area-inset-bottom));left:12px;max-width:none;text-align:center}
+      .login-box{width:calc(100vw - 24px);padding:20px}.login-box input{font-size:16px;min-height:46px}
+    }
+  </style>
+</head>
+<body>
+  <div class="login" id="login">
+    <form class="login-box" id="loginForm">
+      <h2>进入 SMS Center</h2>
+      <p>输入管理 Token。凭据只保存在当前浏览器。</p>
+      <input id="loginToken" type="password" autocomplete="current-password" placeholder="管理 Token">
+      <button class="btn primary" style="width:100%">登录</button>
+    </form>
+  </div>
+  <main class="shell">
+    <header class="top">
+      <div class="brand"><div class="logo">SMS</div><div><h1>SMS Center</h1><p>设备在线状态、短信归档与转发控制台</p></div></div>
+      <div class="actions"><button class="btn" id="refreshBtn">刷新</button><button class="btn" id="logoutBtn">退出</button></div>
+    </header>
+    <nav class="tabs">
+      <button class="btn tab active" data-page="overview">总览</button>
+      <button class="btn tab" data-page="messages">短信</button>
+      <button class="btn tab" data-page="calls">来电</button>
+      <button class="btn tab" data-page="send">发短信</button>
+      <button class="btn tab" data-page="templates">短信模板</button>
+      <button class="btn tab" data-page="devices">设备</button>
+      <button class="btn tab" data-page="routing">转发配置</button>
+      <button class="btn tab" data-page="deliveries">转发记录</button>
+      <button class="btn tab" data-page="mcp">MCP</button>
+    </nav>
+    <section class="stats" id="stats"></section>
+
+    <section class="page active" id="page-overview">
+      <div class="card">
+        <h2>Chrome 消息通知</h2>
+        <p class="hint" id="pushStatus">正在检查当前浏览器的通知状态…</p>
+        <div class="notification-settings">
+          <div class="check-list">
+            <label class="check"><input id="pushSms" type="checkbox" checked>新短信</label>
+            <label class="check"><input id="pushMissedCall" type="checkbox" checked>未接来电</label>
+          </div>
+          <div class="actions">
+            <button class="btn primary" type="button" id="enablePushBtn">在此 Chrome 开启通知</button>
+            <button class="btn hidden" type="button" id="testPushBtn">发送测试通知</button>
+            <button class="btn danger hidden" type="button" id="disablePushBtn">关闭此 Chrome 通知</button>
+          </div>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="card"><h2>设备状态</h2><div id="overviewDevices"></div></div>
+        <div class="card"><h2>最近短信</h2><div id="overviewMessages"></div></div>
+      </div>
+    </section>
+    <section class="page" id="page-messages"><div class="card"><h2>短信归档</h2><div id="messagesTable"></div></div></section>
+    <section class="page" id="page-calls"><div class="card"><h2>来电记录</h2><p class="hint">板子不提供接听功能，所有呼入都会立即挂断并转发。</p><div id="callsTable"></div></div></section>
+    <section class="page" id="page-send">
+      <div class="card">
+        <h2>发送短信</h2>
+        <p class="hint">任务进入队列后，板子会在下一次 1 分钟轮询时取走。发送状态未知时请先核实收件人，避免手动重试造成重复短信。</p>
+        <form id="outboundForm" class="form-grid">
+          <div class="field"><label>发送设备 / SIM</label><select id="outboundDevice" required></select></div>
+          <div class="field"><label>收件手机号</label><input id="outboundRecipient" type="tel" required autocomplete="off" placeholder="例如：13800138000"></div>
+          <div class="field full"><label>短信内容</label><textarea id="outboundBody" maxlength="1000" required placeholder="请输入短信内容"></textarea><div class="muted small right"><span id="outboundCount">0 字，预计 0 条</span> / 最多 1000 字</div></div>
+          <div class="field full"><button class="btn primary">确认并加入发送队列</button></div>
+        </form>
+      </div>
+      <div class="card"><h2>发送记录</h2><div id="outboundTable"></div></div>
+    </section>
+    <section class="page" id="page-templates">
+      <div class="card">
+        <h2>短信转发模板</h2>
+        <p class="hint">短信转发到手机号或飞书时使用。未指定模板的转发目标会自动使用默认模板。</p>
+        <form id="smsTemplateForm" class="form-grid">
+          <input type="hidden" id="smsTemplateId">
+          <div class="field"><label>模板名称</label><input id="smsTemplateName" required maxlength="120" placeholder="例如：精简转发"></div>
+          <div class="field"><label>模板类型</label><select id="smsTemplateDefault"><option value="false">普通模板</option><option value="true">设为默认模板</option></select></div>
+          <div class="field full">
+            <label>可用占位符</label>
+            <div class="placeholder-bar">
+              <button class="btn small" type="button" data-template-placeholder="{{ori}}">{{ori}} 原号码</button>
+              <button class="btn small" type="button" data-template-placeholder="{{sms}}">{{sms}} 短信内容</button>
+              <button class="btn small" type="button" data-template-placeholder="{{receiver}}">{{receiver}} 接收卡</button>
+              <button class="btn small" type="button" data-template-placeholder="{{phone}}">{{phone}} 当前设备号码</button>
+              <button class="btn small" type="button" data-template-placeholder="{{time}}">{{time}} 接收时间</button>
+              <button class="btn small" type="button" data-template-placeholder="{{device}}">{{device}} 设备名称</button>
+            </div>
+          </div>
+          <div class="field full"><label>模板内容</label><textarea id="smsTemplateBody" class="mono" maxlength="4000" required></textarea><div class="muted small right"><span id="smsTemplateCount">0 字</span></div></div>
+          <div class="field full"><label>示例预览</label><pre id="smsTemplatePreview" class="secret-box template-preview"></pre></div>
+          <div class="field full"><div class="actions"><button class="btn primary">保存模板</button><button class="btn" type="button" id="smsTemplateCancel">新增模板</button></div></div>
+        </form>
+        <div id="smsTemplatesTable" style="margin-top:16px"></div>
+      </div>
+    </section>
+    <section class="page" id="page-devices"><div class="card"><h2>设备管理</h2><div id="devicesTable"></div></div></section>
+    <section class="page" id="page-routing">
+      <div class="grid2">
+        <div class="card">
+          <h2>转发目标</h2>
+          <p class="hint">先创建飞书、企业微信群、短信转发或通用 Webhook 目标。</p>
+          <form id="destinationForm" class="form-grid">
+            <input type="hidden" id="destinationId">
+            <div class="field"><label>名称</label><input id="destinationName" required placeholder="例如：运维群"></div>
+            <div class="field"><label>类型</label><select id="destinationKind"><option value="feishu_app">飞书应用机器人</option><option value="feishu_webhook">飞书自定义 Webhook</option><option value="wecom_webhook">企业微信群机器人</option><option value="sms_forward">短信转发到手机号</option><option value="webhook">通用 Webhook</option></select></div>
+            <div class="field full hidden" id="destinationTemplateField"><label>消息模板</label><select id="destinationTemplate"></select><div class="muted small">短信转发和飞书通道均可选择；“使用默认模板”会跟随默认模板的后续调整。</div></div>
+            <div class="field full"><label>配置 JSON</label><textarea id="destinationConfig" class="mono" required></textarea><div class="muted small" id="destinationConfigHint"></div></div>
+            <div class="field"><label>状态</label><select id="destinationEnabled"><option value="true">启用</option><option value="false">停用</option></select></div>
+            <div class="field" style="justify-content:end"><button class="btn primary">保存目标</button></div>
+          </form>
+          <div id="destinationsTable" style="margin-top:16px"></div>
+        </div>
+        <div class="card">
+          <h2>通道组</h2>
+          <p class="hint">把多个接收手机号放进同一组，再选择一个或多个转发目标。</p>
+          <form id="channelGroupForm" class="form-grid">
+            <input type="hidden" id="channelGroupId">
+            <div class="field"><label>通道组名称</label><input id="channelGroupName" required placeholder="例如：门店告警"></div>
+            <div class="field"><label>状态</label><select id="channelGroupEnabled"><option value="true">启用</option><option value="false">停用</option></select></div>
+            <div class="field full"><label>说明</label><input id="channelGroupDescription" placeholder="可选"></div>
+            <div class="field"><label>接收手机号 / 设备（可多选）</label><select id="channelGroupDevices" multiple></select></div>
+            <div class="field"><label>转发目标（可多选）</label><select id="channelGroupDestinations" multiple></select></div>
+            <div class="field full"><div class="actions"><button class="btn primary">保存通道组</button><button class="btn" type="button" id="channelGroupCancel">取消编辑</button></div></div>
+          </form>
+          <div id="channelGroupsTable" style="margin-top:16px"></div>
+        </div>
+      </div>
+    </section>
+    <section class="page" id="page-deliveries"><div class="card"><h2>转发记录</h2><div id="deliveriesTable"></div></div></section>
+    <section class="page" id="page-mcp">
+      <div class="card">
+        <h2>MCP</h2>
+        <p class="hint">用于 Codex、Claude 等 MCP 客户端查询设备和记录，也可调用 send_sms 通过指定 Air724UG 发送真实短信。</p>
+        <div class="form-grid">
+          <div class="field full"><label>Streamable HTTP 地址</label><div class="actions"><input id="mcpEndpoint" readonly><button class="btn" type="button" id="copyMcpEndpoint">复制地址</button></div></div>
+          <div class="field full"><label>鉴权方式</label><div class="mono">Authorization: Bearer &lt;MCP Token&gt;</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>创建 MCP Token</h2>
+        <p class="hint">完整 Token 会保存在服务端，并持续显示在下方管理表格中。所有现有和新建 Token 均具有 read,send 权限。</p>
+        <form id="mcpTokenForm" class="form-grid">
+          <div class="field"><label>名称</label><input id="mcpTokenName" required maxlength="120" placeholder="例如：办公室 Codex"></div>
+          <div class="field"><label>有效期</label><select id="mcpTokenExpiry"><option value="90">90 天</option><option value="30">30 天</option><option value="365">1 年</option><option value="">永不过期</option></select></div>
+          <div class="field full"><button class="btn primary">创建 MCP Token</button></div>
+        </form>
+        <div id="mcpTokenResult" class="secret-box hidden" style="margin-top:14px">
+          <b>Token 已创建</b>
+          <div class="muted small">刷新页面后仍可在下方管理表格查看和复制。</div>
+          <textarea id="mcpRawToken" readonly></textarea>
+          <button class="btn" type="button" id="copyMcpToken">复制 Token</button>
+        </div>
+      </div>
+      <div class="card"><h2>MCP Token 管理</h2><div id="mcpTokensTable"></div></div>
+    </section>
+  </main>
+  <div class="toast" id="toast"></div>
+  <script>
+    let token=localStorage.getItem('smsAdminToken')||'', state=null, pushConfig=null, pushSubscription=null;
+    const $=id=>document.getElementById(id);
+    const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const pill=(text,kind=text)=>`<span class="pill ${esc(kind)}"><span class="dot"></span>${esc(text)}</span>`;
+    const toast=message=>{const el=$('toast');el.textContent=message;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),3500)};
+    async function api(path,options={}){
+      options.headers={...(options.headers||{}),'Content-Type':'application/json','X-SMS-Admin-Token':token};
+      const res=await fetch(`api/${path}`,options);let data={};try{data=await res.json()}catch{}
+      if(res.status===401){$('login').classList.add('show');throw new Error('请登录')}
+      if(!res.ok||data.code){throw new Error(data.message||`HTTP ${res.status}`)}return data;
+    }
+    async function login(value){const res=await fetch('api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:value})});if(!res.ok)throw new Error('Token 错误');token=value;localStorage.setItem('smsAdminToken',value);$('login').classList.remove('show');await refresh();await loadPushState()}
+    const pushSupported=()=>window.isSecureContext&&'serviceWorker' in navigator&&'PushManager' in window&&'Notification' in window;
+    function pushPublicKeyBytes(value){const padding='='.repeat((4-value.length%4)%4);const raw=atob((value+padding).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from([...raw].map(char=>char.charCodeAt(0)))}
+    function pushKeyMatches(subscription,publicKey){const current=subscription?.options?.applicationServerKey;if(!current)return false;const expected=pushPublicKeyBytes(publicKey);const actual=new Uint8Array(current);return actual.length===expected.length&&actual.every((value,index)=>value===expected[index])}
+    async function pushRegistration(){await navigator.serviceWorker.register('service-worker.js');return navigator.serviceWorker.ready}
+    function renderPushState(message=''){
+      const supported=pushSupported();const subscribed=Boolean(pushSubscription);
+      $('enablePushBtn').classList.toggle('hidden',!supported||subscribed);
+      $('testPushBtn').classList.toggle('hidden',!subscribed);
+      $('disablePushBtn').classList.toggle('hidden',!subscribed);
+      $('pushSms').disabled=!supported;$('pushMissedCall').disabled=!supported;
+      if(message){$('pushStatus').textContent=message;return}
+      if(!supported){$('pushStatus').textContent='当前环境不支持 Web Push，请使用 HTTPS 打开的桌面版 Chrome。';return}
+      if(Notification.permission==='denied'){$('pushStatus').textContent='Chrome 已禁止此网站发送通知，请在地址栏左侧的网站设置中重新允许。';return}
+      $('pushStatus').textContent=subscribed?'此 Chrome 已订阅；即使控制台页面关闭，新事件也会弹出系统通知。':'此 Chrome 尚未订阅通知。';
+    }
+    async function savePushSubscription(){
+      if(!pushSubscription)return;
+      await api('admin/web-push/subscriptions',{method:'POST',body:JSON.stringify({subscription:pushSubscription.toJSON(),preferences:{sms:$('pushSms').checked,missed_call:$('pushMissedCall').checked}})});
+    }
+    async function loadPushState(){
+      if(!pushSupported()){renderPushState();return}
+      try{
+        pushConfig=await api('admin/web-push/config');
+        const registration=await pushRegistration();
+        pushSubscription=await registration.pushManager.getSubscription();
+        if(pushSubscription&&!pushKeyMatches(pushSubscription,pushConfig.public_key)){
+          await api('admin/web-push/subscriptions',{method:'DELETE',body:JSON.stringify({endpoint:pushSubscription.endpoint})}).catch(()=>{});
+          await pushSubscription.unsubscribe();pushSubscription=null;
+        }
+        if(pushSubscription){
+          const saved=await api(`admin/web-push/subscriptions?endpoint=${encodeURIComponent(pushSubscription.endpoint)}`);
+          if(saved.subscribed){$('pushSms').checked=saved.preferences.sms;$('pushMissedCall').checked=saved.preferences.missed_call}else await savePushSubscription();
+        }
+        renderPushState();
+      }catch(err){pushConfig=null;pushSubscription=null;renderPushState(`Chrome 通知暂不可用：${err.message}`)}
+    }
+    async function enablePush(){
+      if(!$('pushSms').checked&&!$('pushMissedCall').checked)throw new Error('请至少选择一种通知');
+      if(!pushConfig)pushConfig=await api('admin/web-push/config');
+      const permission=await Notification.requestPermission();
+      if(permission!=='granted')throw new Error('Chrome 没有授予通知权限');
+      const registration=await pushRegistration();
+      let subscription=await registration.pushManager.getSubscription();
+      if(subscription&&!pushKeyMatches(subscription,pushConfig.public_key)){await subscription.unsubscribe();subscription=null}
+      pushSubscription=subscription||await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:pushPublicKeyBytes(pushConfig.public_key)});
+      await savePushSubscription();renderPushState();
+      await api('admin/web-push/test',{method:'POST',body:JSON.stringify({endpoint:pushSubscription.endpoint})});
+      toast('Chrome 通知已开启，测试通知已发送');
+    }
+    async function disablePush(){
+      if(!pushSubscription)return;
+      const current=pushSubscription;
+      await api('admin/web-push/subscriptions',{method:'DELETE',body:JSON.stringify({endpoint:current.endpoint})});
+      await current.unsubscribe();pushSubscription=null;renderPushState();toast('此 Chrome 的通知已关闭');
+    }
+    async function testPush(){if(!pushSubscription)throw new Error('请先开启通知');await api('admin/web-push/test',{method:'POST',body:JSON.stringify({endpoint:pushSubscription.endpoint})});toast('测试通知已发送')}
+    async function updatePushPreferences(changed){
+      if(!$('pushSms').checked&&!$('pushMissedCall').checked){changed.checked=true;toast('请至少保留一种通知');return}
+      if(pushSubscription){await savePushSubscription();toast('通知类型已更新')}
+    }
+    function fmt(t){if(!t)return '—';try{return new Date(t).toLocaleString('zh-CN',{hour12:false})}catch{return t}}
+    function trafficKb(value){return (Math.max(0,Number(value)||0)/1024).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}
+    function table(headers,rows){return rows.length?`<div class="table-wrap"><table><thead><tr>${headers.map(x=>`<th>${x}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`:'<div class="empty">暂无数据</div>'}
+    const destinationKindLabels={feishu_app:'飞书应用机器人',feishu_webhook:'飞书自定义 Webhook',wecom_webhook:'企业微信群机器人',sms_forward:'短信转发到手机号',webhook:'通用 Webhook'};
+    const templatedDestinationKinds=new Set(['sms_forward','feishu_app','feishu_webhook']);
+    const outboundStatusLabels={pending:'等待板子领取',sending:'板子发送中',sent:'发送成功',failed:'发送失败',unknown:'状态未知'};
+    const mcpTokenStatusLabels={active:'有效',expired:'已过期',revoked:'已撤销'};
+    const eventTypeLabels={sms:'短信',missed_call:'未接来电'};
+    const smsParts=text=>{if(!text)return 0;const ascii=/^[\x20-\x7e\r\n]*$/.test(text);const single=ascii?160:70;const joined=ascii?153:67;return text.length<=single?1:Math.ceil(text.length/joined)};
+    const updateOutboundCount=()=>{const text=$('outboundBody').value;$('outboundCount').textContent=`${text.length} 字，预计 ${smsParts(text)} 条`};
+    const tagList=values=>values.length?`<div class="tag-list">${values.map(value=>`<span class="tag">${esc(value)}</span>`).join('')}</div>`:'<span class="muted">未配置</span>';
+    const smsTemplateName=id=>{const templates=state?.sms_templates||[];if(id)return templates.find(item=>item.id===Number(id))?.name||`模板 #${id}`;const fallback=templates.find(item=>item.is_default);return fallback?`默认：${fallback.name}`:'默认模板'};
+    function updateSmsTemplatePreview(){const body=$('smsTemplateBody').value;const samples={ori:'13167258815',sms:'【腾讯科技】928662（企业微信验证码，15分钟内有效）',receiver:'15336533423',phone:'18501635881',time:'26/07/28,14:17:54+32',device:'GK21.5PTM'};$('smsTemplatePreview').textContent=body.replace(/\{\{\s*(ori|sms|receiver|phone|time|device)\s*\}\}/g,(_,key)=>samples[key]);$('smsTemplateCount').textContent=`${body.length} 字`}
+    function refillMultiSelect(element,options){const selected=new Set([...element.selectedOptions].map(option=>option.value));element.innerHTML=options.map(option=>`<option value="${esc(option.value)}">${esc(option.label)}</option>`).join('');[...element.options].forEach(option=>option.selected=selected.has(option.value))}
+    function applyTableLabels(){document.querySelectorAll('.table-wrap table').forEach(tableElement=>{const labels=[...tableElement.querySelectorAll('thead th')].map(cell=>cell.textContent.trim());tableElement.querySelectorAll('tbody tr').forEach(row=>[...row.children].forEach((cell,index)=>cell.dataset.label=labels[index]||''))})}
+    function render(){
+      const s=state.stats;$('stats').innerHTML=[['设备',s.devices],['在线',s.online],['短信',s.messages],['来电',s.missed_calls||0],['待转发',s.pending],['失败',s.failed]].map(([k,v])=>`<div class="stat"><b>${v}</b><span>${k}</span></div>`).join('');
+      $('overviewDevices').innerHTML=state.devices.slice(0,8).map(d=>`<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line)"><div><b>${esc(d.name||'未命名设备')}</b><div class="mono">${esc(d.phone_number||'未录入手机号')}</div><div class="muted small">${esc(d.id)}</div></div><div class="right">${pill(d.online?'在线':'离线',d.online?'online':'offline')}<div class="muted small">${fmt(d.last_seen)}</div></div></div>`).join('')||'<div class="empty">等待设备注册</div>';
+      $('overviewMessages').innerHTML=state.messages.slice(0,8).map(m=>`<div style="padding:9px 0;border-bottom:1px solid var(--line)"><div style="display:flex;justify-content:space-between"><b>${esc(m.sender||'未知号码')}</b>${pill(m.status)}</div><div class="mono small">接收卡：${esc(m.device_phone||'未录入手机号')}</div><div class="muted body-cell">${esc(m.body).slice(0,120)}</div></div>`).join('')||'<div class="empty">等待短信上报</div>';
+      $('messagesTable').innerHTML=table(['ID','设备','接收手机号','发送号码','短信时间','内容','状态','入库时间'],state.messages.map(m=>`<tr><td>${m.id}</td><td>${esc(m.device_label)}</td><td class="mono"><b>${esc(m.device_phone||'未录入')}</b></td><td class="mono">${esc(m.sender||'未知')}</td><td>${esc(m.sms_time||'—')}</td><td class="body-cell">${esc(m.body)}</td><td>${pill(m.status)}</td><td>${fmt(m.received_at)}</td></tr>`));
+      $('callsTable').innerHTML=table(['ID','设备','接收手机号','来电号码','状态','入库时间'],(state.missed_calls||[]).map(c=>`<tr><td>${c.id}</td><td>${esc(c.device_label)}</td><td class="mono"><b>${esc(c.device_phone||'未录入')}</b></td><td class="mono">${esc(c.sender||'未知')}</td><td>${pill(c.status)}</td><td>${fmt(c.received_at)}</td></tr>`));
+      $('outboundTable').innerHTML=table(['ID','来源','发送设备','发送卡号','收件手机号','内容','状态','入队时间','板子领取','发送完成','错误','操作'],(state.outbound_sms||[]).map(o=>`<tr><td>${o.id}</td><td>${o.source_delivery_id?`自动转发 #${o.source_delivery_id}<div class="muted small">${esc(o.source_destination_name||'')}</div>`:o.feishu_reply_event_id?`飞书群回复<div class="muted small">${esc(o.feishu_reply_destination_name||'')}</div>`:o.mcp_request_id?`MCP<div class="mono muted small">${esc(o.mcp_request_id)}</div>`:'控制台'}</td><td>${esc(o.device_label)}</td><td class="mono">${esc(o.device_phone||'未录入')}</td><td class="mono"><b>${esc(o.recipient)}</b></td><td class="body-cell">${esc(o.body)}</td><td>${pill(outboundStatusLabels[o.status]||o.status,o.status)}${o.feishu_reply_event_id?`<div class="muted small">飞书回执：${esc(o.feishu_notified_status||'等待')}</div>`:''}</td><td>${fmt(o.created_at)}</td><td>${fmt(o.dispatched_at)}</td><td>${fmt(o.sent_at||o.completed_at)}</td><td class="body-cell">${esc(o.last_error||o.feishu_notification_error||'—')}</td><td>${o.status==='pending'?`<button class="btn danger small" onclick="deleteOutbound(${o.id})">删除</button>`:['failed','unknown'].includes(o.status)?`<button class="btn small" onclick="retryOutbound(${o.id})">重新入队</button>`:''}</td></tr>`));
+      $('devicesTable').innerHTML=table(['状态','名称','SIM 手机号','设备 ID','版本','网络','信号','累计估算流量','板端队列','最后心跳','操作'],state.devices.map(d=>`<tr><td>${pill(d.online?'在线':'离线',d.online?'online':'offline')}</td><td><b>${esc(d.name||'未命名')}</b></td><td class="mono"><b>${esc(d.phone_number||'未录入')}</b></td><td class="mono">${esc(d.id)}</td><td><div class="mono">脚本：${esc(d.app_version||'未上报')}</div><div class="muted small">固件：${esc(d.firmware||'未上报')}</div></td><td>${esc(d.network||'—')}</td><td>${d.signal??'—'}</td><td>${d.traffic_session_id?`<b class="mono">${trafficKb(d.traffic_total_bytes)} KB</b><div class="muted small">上报：${fmt(d.traffic_updated_at)}</div>`:'<span class="muted">等待板端上报</span>'}</td><td>${d.queue_count}</td><td>${fmt(d.last_seen)}</td><td><button class="btn small" onclick="editDevice('${esc(d.id)}')">编辑</button></td></tr>`));
+      $('destinationsTable').innerHTML=table(['名称','类型','状态','操作'],state.destinations.map(d=>`<tr><td>${esc(d.name)}${d.kind==='sms_forward'?`<div class="mono small">${esc(d.config.recipient||'')}</div>`:''}${templatedDestinationKinds.has(d.kind)?`<div class="muted small">${esc(smsTemplateName(d.config.template_id))}</div>`:''}${d.kind==='feishu_app'?`<div class="muted small">群回复 → SMS（${d.config.verification_token?'事件推送 + 10 秒轮询':'10 秒轮询'}）</div>`:''}</td><td>${esc(destinationKindLabels[d.kind]||d.kind)}</td><td>${pill(d.enabled?'启用':'停用',d.enabled?'online':'offline')}</td><td><button class="btn small" onclick="editDestination(${d.id})">编辑</button> <button class="btn danger small" onclick="deleteDestination(${d.id})">删除</button></td></tr>`));
+      const deviceById=Object.fromEntries(state.devices.map(device=>[device.id,device]));
+      const destinationById=Object.fromEntries(state.destinations.map(destination=>[destination.id,destination]));
+      $('channelGroupsTable').innerHTML=table(['通道组','接收手机号 / 设备','转发目标','状态','操作'],(state.channel_groups||[]).map(group=>{const deviceLabels=group.device_ids.map(id=>{const device=deviceById[id];return device?(device.phone_number||device.name||id):id});const destinationLabels=group.destination_ids.map(id=>destinationById[id]?.name||`#${id}`);return `<tr><td><b>${esc(group.name)}</b><div class="muted small">${esc(group.description||'')}</div></td><td>${tagList(deviceLabels)}</td><td>${tagList(destinationLabels)}</td><td>${pill(group.enabled?'启用':'停用',group.enabled?'online':'offline')}</td><td><button class="btn small" onclick="editChannelGroup(${group.id})">编辑</button> <button class="btn danger small" onclick="deleteChannelGroup(${group.id})">删除</button></td></tr>`}));
+      $('deliveriesTable').innerHTML=table(['ID','消息','设备','接收手机号','目标','状态','次数','转发时间','最近错误','操作'],state.deliveries.map(d=>`<tr><td>${d.id}</td><td>#${d.message_id}<div class="muted">${esc(eventTypeLabels[d.event_type]||d.event_type)} / ${esc(d.sender||'未知')}</div></td><td>${esc(d.device_label)}</td><td class="mono"><b>${esc(d.device_phone||'未录入')}</b></td><td>${esc(d.destination_name)}${d.forward_recipient?`<div class="mono small">→ ${esc(d.forward_recipient)}</div>`:''}</td><td>${pill(d.status)}${d.outbound_status?`<div class="muted small">${esc(outboundStatusLabels[d.outbound_status]||d.outbound_status)}</div>`:''}</td><td>${d.attempts}</td><td>${fmt(d.delivered_at||d.forward_sent_at)}</td><td class="body-cell">${esc(d.last_error||'—')}</td><td>${d.status==='delivered'?'':`<button class="btn small" onclick="retryDelivery(${d.id})">重试</button>`}</td></tr>`));
+      $('smsTemplatesTable').innerHTML=table(['模板','内容','状态','更新时间','操作'],(state.sms_templates||[]).map(t=>`<tr><td><b>${esc(t.name)}</b></td><td class="mono body-cell">${esc(t.body)}</td><td>${t.is_default?pill('默认','online'):'普通模板'}</td><td>${fmt(t.updated_at)}</td><td><button class="btn small" onclick="editSmsTemplate(${t.id})">编辑</button> ${t.is_default?'':`<button class="btn small" onclick="setDefaultSmsTemplate(${t.id})">设为默认</button> <button class="btn danger small" onclick="deleteSmsTemplate(${t.id})">删除</button>`}</td></tr>`));
+      $('mcpTokensTable').innerHTML=table(['名称','Token 全文','权限','状态','创建时间','最后使用','过期时间','操作'],(state.mcp_tokens||[]).map(t=>`<tr><td><b>${esc(t.name)}</b></td><td class="mono body-cell">${t.token?`${esc(t.token)} <button class="btn small" onclick="copyMcpStoredToken(${t.id})">复制</button>`:'<span class="muted">历史 Token 无法恢复，请重新创建</span>'}</td><td class="mono">${esc(t.scopes)}</td><td>${pill(mcpTokenStatusLabels[t.status]||t.status,t.status==='active'?'online':'offline')}</td><td>${fmt(t.created_at)}</td><td>${fmt(t.last_used_at)}</td><td>${fmt(t.expires_at)}</td><td>${t.status==='active'?`<button class="btn small" onclick="revokeMcpToken(${t.id})">撤销</button> `:''}<button class="btn danger small" onclick="deleteMcpToken(${t.id})">删除</button></td></tr>`));
+      const outboundDeviceValue=$('outboundDevice').value;
+      $('outboundDevice').innerHTML=state.devices.map(d=>`<option value="${esc(d.id)}">${esc(d.phone_number||'未录入手机号')} / ${esc(d.name||d.id)} / ${d.online?'在线':'离线'}</option>`).join('');
+      if([...$('outboundDevice').options].some(option=>option.value===outboundDeviceValue))$('outboundDevice').value=outboundDeviceValue;
+      const destinationTemplateValue=$('destinationTemplate').value;
+      const defaultTemplate=(state.sms_templates||[]).find(item=>item.is_default);
+      $('destinationTemplate').innerHTML=`<option value="">使用默认模板${defaultTemplate?`（${esc(defaultTemplate.name)}）`:''}</option>`+(state.sms_templates||[]).map(template=>`<option value="${template.id}">${esc(template.name)}${template.is_default?'（当前默认）':''}</option>`).join('');
+      if([...$('destinationTemplate').options].some(option=>option.value===destinationTemplateValue))$('destinationTemplate').value=destinationTemplateValue;
+      refillMultiSelect($('channelGroupDevices'),state.devices.map(device=>({value:device.id,label:`${device.phone_number||'未录入手机号'} / ${device.name||device.id}`})));
+      refillMultiSelect($('channelGroupDestinations'),state.destinations.map(destination=>({value:String(destination.id),label:`${destination.name} / ${destinationKindLabels[destination.kind]||destination.kind}`})));
+      if(!$('smsTemplateId').value&&!$('smsTemplateBody').value&&defaultTemplate){$('smsTemplateBody').value=defaultTemplate.body;updateSmsTemplatePreview()}
+      applyTableLabels();
+    }
+    async function refresh(){state=await api('admin/snapshot');render()}
+    window.editDevice=async id=>{const d=state.devices.find(x=>x.id===id);const name=prompt('设备名称',d.name||'');if(name===null)return;const phone=prompt('SIM 手机号',d.phone_number||'');if(phone===null)return;await api(`admin/devices/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify({name,phone_number:phone})});toast('设备已更新');refresh()}
+    window.editDestination=id=>{const d=state.destinations.find(x=>x.id===id);const config={...d.config};$('destinationId').value=d.id;$('destinationName').value=d.name;$('destinationKind').value=d.kind;$('destinationEnabled').value=String(d.enabled);$('destinationTemplate').value=config.template_id?String(config.template_id):'';delete config.template_id;updateDestinationConfigHint();$('destinationConfig').value=JSON.stringify(config,null,2);window.scrollTo({top:0,behavior:'smooth'})}
+    window.deleteDestination=async id=>{if(!confirm('删除目标及其所有路由和转发记录？'))return;await api(`admin/destinations/${id}`,{method:'DELETE'});toast('目标已删除');refresh()}
+    function resetChannelGroupForm(){$('channelGroupForm').reset();$('channelGroupId').value='';[...$('channelGroupDevices').options,...$('channelGroupDestinations').options].forEach(option=>option.selected=false)}
+    window.editChannelGroup=id=>{const group=(state.channel_groups||[]).find(item=>item.id===id);if(!group)return;$('channelGroupId').value=group.id;$('channelGroupName').value=group.name;$('channelGroupDescription').value=group.description||'';$('channelGroupEnabled').value=String(group.enabled);const deviceIds=new Set(group.device_ids);const destinationIds=new Set(group.destination_ids.map(String));[...$('channelGroupDevices').options].forEach(option=>option.selected=deviceIds.has(option.value));[...$('channelGroupDestinations').options].forEach(option=>option.selected=destinationIds.has(option.value));$('channelGroupForm').scrollIntoView({behavior:'smooth',block:'start'})}
+    window.deleteChannelGroup=async id=>{if(!confirm('删除这个通道组？已有短信和转发记录会保留。'))return;await api(`admin/channel-groups/${id}`,{method:'DELETE'});toast('通道组已删除');resetChannelGroupForm();refresh()}
+    window.retryDelivery=async id=>{await api(`admin/deliveries/${id}/retry`,{method:'POST',body:'{}'});toast('已加入重试队列');refresh()}
+    window.retryOutbound=async id=>{if(!confirm('确认将这条短信重新加入发送队列？收件人可能收到重复短信。'))return;await api(`admin/outbound-sms/${id}/retry`,{method:'POST',body:'{}'});toast('短信已重新入队');refresh()}
+    window.deleteOutbound=async id=>{if(!confirm('确认删除这条待发送短信？删除后无法恢复。'))return;await api(`admin/outbound-sms/${id}`,{method:'DELETE'});toast('待发送短信已删除');refresh()}
+    function resetSmsTemplateForm(){$('smsTemplateForm').reset();$('smsTemplateId').value='';const fallback=(state?.sms_templates||[]).find(item=>item.is_default);$('smsTemplateBody').value=fallback?.body||'';$('smsTemplateDefault').value='false';updateSmsTemplatePreview()}
+    window.editSmsTemplate=id=>{const item=(state.sms_templates||[]).find(template=>template.id===id);if(!item)return;$('smsTemplateId').value=item.id;$('smsTemplateName').value=item.name;$('smsTemplateBody').value=item.body;$('smsTemplateDefault').value=String(item.is_default);updateSmsTemplatePreview();$('smsTemplateForm').scrollIntoView({behavior:'smooth',block:'start'})}
+    window.setDefaultSmsTemplate=async id=>{await api(`admin/sms-templates/${id}/default`,{method:'POST',body:'{}'});toast('默认模板已更新');refresh()}
+    window.deleteSmsTemplate=async id=>{if(!confirm('确认删除这个短信模板？'))return;await api(`admin/sms-templates/${id}`,{method:'DELETE'});toast('短信模板已删除');refresh()}
+    window.revokeMcpToken=async id=>{if(!confirm('确认撤销这个 MCP Token？使用它的客户端会立即失去访问权限。'))return;await api(`admin/mcp-tokens/${id}`,{method:'DELETE'});toast('MCP Token 已撤销');refresh()}
+    window.deleteMcpToken=async id=>{if(!confirm('确认永久删除这个 MCP Token？完整 Token、哈希和使用记录都会删除，无法恢复。'))return;await api(`admin/mcp-tokens/${id}/permanent`,{method:'DELETE'});toast('MCP Token 已删除');refresh()}
+    async function copyText(value){try{await navigator.clipboard.writeText(value);toast('已复制')}catch{const area=document.createElement('textarea');area.value=value;document.body.appendChild(area);area.select();document.execCommand('copy');area.remove();toast('已复制')}}
+    window.copyMcpStoredToken=id=>{const item=(state.mcp_tokens||[]).find(tokenItem=>tokenItem.id===id);if(item?.token)copyText(item.token)}
+    $('loginForm').addEventListener('submit',e=>{e.preventDefault();login($('loginToken').value).catch(err=>toast(err.message))});
+    $('refreshBtn').onclick=()=>refresh().catch(err=>toast(err.message));$('logoutBtn').onclick=()=>{localStorage.removeItem('smsAdminToken');token='';$('login').classList.add('show')};
+    $('enablePushBtn').onclick=()=>enablePush().catch(err=>{renderPushState();toast(err.message)});
+    $('disablePushBtn').onclick=()=>disablePush().catch(err=>toast(err.message));
+    $('testPushBtn').onclick=()=>testPush().catch(err=>toast(err.message));
+    $('pushSms').onchange=event=>updatePushPreferences(event.target).catch(err=>toast(err.message));
+    $('pushMissedCall').onchange=event=>updatePushPreferences(event.target).catch(err=>toast(err.message));
+    function activatePage(page){const button=document.querySelector(`.tab[data-page="${page}"]`)||document.querySelector('.tab[data-page="overview"]');document.querySelectorAll('.tab').forEach(item=>item.classList.toggle('active',item===button));document.querySelectorAll('.page').forEach(item=>item.classList.remove('active'));$(`page-${button.dataset.page}`).classList.add('active')}
+    document.querySelectorAll('.tab').forEach(btn=>btn.onclick=()=>{location.hash=btn.dataset.page;activatePage(btn.dataset.page)});
+    window.addEventListener('hashchange',()=>activatePage(location.hash.slice(1)));
+    function updateDestinationConfigHint(){const kind=$('destinationKind').value;$('destinationTemplateField').classList.toggle('hidden',!templatedDestinationKinds.has(kind));const hints={feishu_app:'短信通知使用所选消息模板；群回复转 SMS 默认每 10 秒读取一次群历史消息。可选加速：订阅 im.message.receive_v1，请求地址为 '+new URL('api/integrations/feishu/events',location.href).href+'，并把 Verification Token 填入 verification_token；Encrypt Key 保持未启用。',feishu_webhook:'短信通知使用所选消息模板。',sms_forward:'recipient 是接收短信的号码；sender_device_id 留空时使用收到原短信的板子，填写设备 ID 时改由指定板子发送。目标号码不能是已登记的板载 SIM。'};$('destinationConfigHint').textContent=hints[kind]||''}
+    $('destinationKind').onchange=()=>{const examples={feishu_app:{app_id:'cli_xxx',app_secret:'xxx',receive_id:'oc_xxx',receive_id_type:'chat_id',verification_token:'飞书事件订阅 Verification Token'},feishu_webhook:{url:'https://open.feishu.cn/open-apis/bot/v2/hook/xxx'},wecom_webhook:{url:'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx'},sms_forward:{recipient:'13800138000',sender_device_id:''},webhook:{url:'https://example.com/webhook',headers:{Authorization:'Bearer xxx'}}};$('destinationConfig').value=JSON.stringify(examples[$('destinationKind').value],null,2);$('destinationTemplate').value='';updateDestinationConfigHint()};
+    $('destinationKind').onchange();
+    $('destinationForm').addEventListener('submit',async e=>{e.preventDefault();try{const config=JSON.parse($('destinationConfig').value);if(templatedDestinationKinds.has($('destinationKind').value)&&$('destinationTemplate').value)config.template_id=Number($('destinationTemplate').value);const body={id:$('destinationId').value||null,name:$('destinationName').value,kind:$('destinationKind').value,enabled:$('destinationEnabled').value==='true',config};await api('admin/destinations',{method:'POST',body:JSON.stringify(body)});e.target.reset();$('destinationId').value='';$('destinationKind').onchange();toast('转发目标已保存');refresh()}catch(err){toast(err.message)}});
+    $('smsTemplateForm').addEventListener('submit',async e=>{e.preventDefault();try{await api('admin/sms-templates',{method:'POST',body:JSON.stringify({id:$('smsTemplateId').value||null,name:$('smsTemplateName').value.trim(),body:$('smsTemplateBody').value,is_default:$('smsTemplateDefault').value==='true'})});toast('短信模板已保存');resetSmsTemplateForm();refresh()}catch(err){toast(err.message)}})
+    $('smsTemplateCancel').onclick=resetSmsTemplateForm;
+    $('smsTemplateBody').addEventListener('input',updateSmsTemplatePreview);
+    document.querySelectorAll('[data-template-placeholder]').forEach(button=>button.onclick=()=>{const area=$('smsTemplateBody');area.setRangeText(button.dataset.templatePlaceholder,area.selectionStart,area.selectionEnd,'end');area.focus();updateSmsTemplatePreview()});
+    $('channelGroupForm').addEventListener('submit',async e=>{e.preventDefault();try{const body={id:$('channelGroupId').value||null,name:$('channelGroupName').value,description:$('channelGroupDescription').value,enabled:$('channelGroupEnabled').value==='true',device_ids:[...$('channelGroupDevices').selectedOptions].map(option=>option.value),destination_ids:[...$('channelGroupDestinations').selectedOptions].map(option=>Number(option.value))};await api('admin/channel-groups',{method:'POST',body:JSON.stringify(body)});resetChannelGroupForm();toast('通道组已保存');refresh()}catch(err){toast(err.message)}});
+    $('channelGroupCancel').onclick=resetChannelGroupForm;
+    $('mcpTokenForm').addEventListener('submit',async e=>{e.preventDefault();try{const expiry=$('mcpTokenExpiry').value;const result=await api('admin/mcp-tokens',{method:'POST',body:JSON.stringify({name:$('mcpTokenName').value.trim(),expires_in_days:expiry===''?null:Number(expiry)})});$('mcpRawToken').value=result.token;$('mcpTokenResult').classList.remove('hidden');e.target.reset();$('mcpTokenExpiry').value='90';toast('MCP Token 已创建（read,send）');refresh()}catch(err){toast(err.message)}});
+    $('copyMcpEndpoint').onclick=()=>copyText($('mcpEndpoint').value);
+    $('copyMcpToken').onclick=()=>copyText($('mcpRawToken').value);
+    $('outboundBody').addEventListener('input',updateOutboundCount);
+    $('outboundForm').addEventListener('submit',async e=>{e.preventDefault();const device=$('outboundDevice').selectedOptions[0]?.textContent||$('outboundDevice').value;const recipient=$('outboundRecipient').value.trim();const body=$('outboundBody').value.trim();const parts=smsParts(body);if(!confirm(`确认使用 ${device} 向 ${recipient} 发送短信？\\n预计按 ${parts} 条短信计费。\\n\\n${body}`))return;try{const result=await api('admin/outbound-sms',{method:'POST',body:JSON.stringify({device_id:$('outboundDevice').value,recipient,body})});$('outboundRecipient').value='';$('outboundBody').value='';updateOutboundCount();toast(`短信 #${result.id} 已加入队列`);refresh()}catch(err){toast(err.message)}});
+    $('mcpEndpoint').value=new URL('mcp/',location.href).href;
+    activatePage(location.hash.slice(1));
+    if(token)refresh().then(loadPushState).catch(()=>{$('login').classList.add('show')});else $('login').classList.add('show');
+    setInterval(()=>{if(token)refresh().catch(()=>{})},30000);
+  </script>
+</body>
+</html>

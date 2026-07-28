@@ -1,0 +1,7 @@
+config.lua
+*.log
+.tmp/
+server/compose.yml
+pclogs/
+.idea/
+

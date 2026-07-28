@@ -1,0 +1,7 @@
+# Add these directives to the existing `location /sms/` proxy block.
+# Keep the current proxy_pass and forwarded headers unchanged.
+proxy_http_version 1.1;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+proxy_read_timeout 370s;
+proxy_send_timeout 370s;

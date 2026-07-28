@@ -1,0 +1,5 @@
+Flask>=3.0,<4
+mcp>=1.28,<2
+requests>=2.31,<3
+websockets>=15,<16
+pywebpush>=2.0,<3

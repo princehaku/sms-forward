@@ -1,0 +1,18 @@
+services:
+  sms-center:
+    build: .
+    container_name: sms-center
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      DEVICE_TOKEN: "${DEVICE_TOKEN:-token-abc}"
+      ADMIN_TOKEN: "${ADMIN_TOKEN:-token-admin}"
+      DATABASE_PATH: /data/sms-center.db
+      HEARTBEAT_SECONDS: "${HEARTBEAT_SECONDS:-60}"
+      OFFLINE_SECONDS: "${OFFLINE_SECONDS:-180}"
+      DEVICE_SYNC_SECONDS: "${DEVICE_SYNC_SECONDS:-120}"
+      OUTBOUND_STALE_SECONDS: "${OUTBOUND_STALE_SECONDS:-900}"
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data:/data
