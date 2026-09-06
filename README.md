@@ -9,6 +9,20 @@
 飞书、企业微信群、手机号或通用 Webhook。控制台也可以创建下行短信任务，由
 指定板子使用 SIM 卡发送。
 
+## 目录结构
+
+根目录只保留项目文档和仓库配置，代码按用途存放：
+
+```text
+device/       Air724UG 板端 Lua 代码和本地配置
+server/       中心服务、控制台及服务端测试
+tests/        板端 Lua 测试
+tools/        维护和诊断脚本
+```
+
+首次配置时，将 `device/config.example.lua` 复制为 `device/config.lua` 并填写
+本地配置；`config.lua` 已被 Git 忽略。
+
 ## 架构
 
 1. 板子使用 IMEI 作为设备 ID，启动后调用 `/api/device/register`。
@@ -29,7 +43,7 @@
 
 ## 板端配置
 
-本地 `config.lua`：
+本地 `device/config.lua`：
 
 ```lua
 return {
@@ -65,7 +79,7 @@ IMEI 会自动获取。模组的 `AT+CNUM` 经常无法返回 SIM 手机号，�
 
 远程 OTA 当前默认禁用。`ota_enabled = false` 时，板端不会加载 Air724UG 的
 `update` 库，也不会向合宙 IoT 平台发起升级检查。以后需要恢复时，将
-`ota_enabled` 改为 `true`，并把平台分配的 Product Key 只写入本地 `config.lua`
+`ota_enabled` 改为 `true`，并把平台分配的 Product Key 只写入本地 `device/config.lua`
 的 `ota_product_key`；示例配置保持为空，密钥不能写入日志、文档或版本库。
 
 - 开机联网后延迟检查，默认每 6 小时再检查一次。
@@ -77,12 +91,30 @@ IMEI 会自动获取。模组的 `AT+CNUM` 经常无法返回 SIM 手机号，�
 
 ## 下载到 Air724UG
 
-Luatools 项目继续使用以下文件：
+Luatools 项目从 `device/` 目录添加以下文件；已有项目需将旧根目录路径更新为新路径：
 
-- `main.lua`
-- `sms_center.lua`
-- `sms_center_core.lua`
-- `config.lua`
+- `device/main.lua`
+- `device/sms_center.lua`
+- `device/sms_center_core.lua`
+- `device/config.lua`
+
+下载到模组时保留文件名，将这四个文件放在同一个脚本目录中，模块加载名保持不变。
+`device/config.example.lua` 仅供本地配置参考，无需下载。
+
+在仓库根目录执行板端语法检查和测试：
+
+```powershell
+Get-ChildItem device/*.lua, tests/*.lua | ForEach-Object {
+    & .tmp/Luatools/_temp/tools/luac.exe -p $_.FullName
+    if ($LASTEXITCODE -ne 0) { throw "Lua syntax check failed: $($_.Name)" }
+}
+Get-ChildItem tests/test_*.lua | ForEach-Object {
+    lua $_.FullName
+    if ($LASTEXITCODE -ne 0) { throw "Lua test failed: $($_.Name)" }
+}
+```
+
+运行测试需要本机 Lua 解释器；测试路径以仓库根目录为基准。
 
 启用“添加默认扩展库”和 USB trace，下载脚本后重启模块。日志出现以下内容说明运行正常：
 

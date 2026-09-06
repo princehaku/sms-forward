@@ -4,6 +4,13 @@
 
 - 不要用“不是……而是……”造句。
 
+## 提交与推送
+
+- 每次完成修改并通过相关验证后，主动执行 Git 提交和 push，不要遗漏推送；用户明确要求暂不提交或推送时遵循用户要求。
+- 提交信息使用标准类型前缀和中文说明，例如 `feat: 增加功能`、`fix: 修复问题`、`refactor: 调整代码结构`。
+- 仅提交当前任务相关改动，保留工作区中已有的无关改动；严禁提交密钥、本地配置、日志和诊断转储。
+- push 后确认远端分支已更新；推送失败时说明原因，不得宣称已完成。
+
 ## 项目与硬件
 
 - 项目用途：使用 Air724UG 接收短信并按通道组转发到飞书或企业微信群，
@@ -28,7 +35,7 @@
 - V4 固件线存在回退限制，不要尝试降回 V3037。
 - 当前 SIM 注册、联网、短信收发、转发和 HTTPS 心跳均可在 V4035 上正常工作。
 - 日常业务或指示灯调整只需下载 Lua 脚本，无需重复刷底层固件。
-- 保持 `main.lua` 中的 `AT+RNDISCALL=0,1`，避免 USB 进入 RNDIS 模式后影响日志和下载。
+- 保持 `device/main.lua` 中的 `AT+RNDISCALL=0,1`，避免 USB 进入 RNDIS 模式后影响日志和下载。
 
 ## 板载指示灯
 
@@ -59,7 +66,7 @@
 - Lua 语法检查：
 
   ```powershell
-  .tmp\Luatools\_temp\tools\luac.exe -p .\main.lua
+  .tmp\Luatools\_temp\tools\luac.exe -p .\device\main.lua
   ```
 
 - 下载完成后检查 Luatools 日志同时出现：
@@ -78,7 +85,7 @@
 ## 修改原则
 
 - 保留短信离线队列、心跳、通道组和下行短信逻辑，指示灯修改应局限在
-  `main.lua` 的 `netLed` 配置。
+  `device/main.lua` 的 `netLed` 配置。
 - 下行短信使用 60 秒轮询，空响应保持为 `{"code":0}`。任务领取后不能自动
   重发；长时间无结果应标记为 `unknown`，由管理员确认后手动重试。
 - `sms_forward` 转发目标通过现有 `outbound_sms` 队列发送，使用
@@ -108,13 +115,13 @@
   `/api/device/missed-call`。中心以 `device_id + call_id` 去重。
 - 短信和来电在控制台分开显示，转发共用通道组。飞书群回复 SMS 只允许关联
   `event_type='sms'` 的投递，来电通知不能触发回复短信。
-- 不要提交 `config.lua`、Luatools 日志、诊断转储或任何密钥。
+- 不要提交 `device/config.lua`、Luatools 日志、诊断转储或任何密钥。
 - 修改后至少执行 Lua 语法检查；涉及模组运行行为时，还要完成下载和联网心跳验证。
 
 ## 自动升级
 
 - 自动升级使用 Air724UG 自带的 `update` 库和合宙 IoT 平台。Product Key 只允许
-  保存在被忽略的 `config.lua`，禁止写入日志、文档和版本库。
+  保存在被忽略的 `device/config.lua`，禁止写入日志、文档和版本库。
 - `_G.PROJECT` 保持为 `SMSCENTER`；每次发布都严格递增 `_G.VERSION`，不要发布
   低于板端版本的升级包。
 - 开机延迟检查，默认每 6 小时检查一次。短信、来电、下行任务或结果队列繁忙时

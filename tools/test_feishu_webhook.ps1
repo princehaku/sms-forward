@@ -1,15 +1,15 @@
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$configPath = Join-Path $projectRoot 'config.lua'
+$configPath = Join-Path $projectRoot 'device/config.lua'
 if (-not (Test-Path -LiteralPath $configPath)) {
-    throw 'config.lua does not exist.'
+    throw 'device/config.lua does not exist.'
 }
 
 $configText = Get-Content -LiteralPath $configPath -Raw
 $tokenMatch = [regex]::Match($configText, 'feishu_bot_token\s*=\s*"([^"]*)"')
 if (-not $tokenMatch.Success -or [string]::IsNullOrWhiteSpace($tokenMatch.Groups[1].Value)) {
-    throw 'feishu_bot_token is empty. Fill it in config.lua first.'
+    throw 'feishu_bot_token is empty. Fill it in device/config.lua first.'
 }
 
 $token = $tokenMatch.Groups[1].Value.Trim()

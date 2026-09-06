@@ -1,4 +1,4 @@
-package.path = "./?.lua;" .. package.path
+package.path = "./device/?.lua;" .. package.path
 
 local core = require "sms_center_core"
 local passed = 0

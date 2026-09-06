@@ -1,4 +1,4 @@
-package.path = "./?.lua;" .. (package.path or "")
+package.path = "./device/?.lua;" .. (package.path or "")
 package.preload = package.preload or {}
 
 local files = {}

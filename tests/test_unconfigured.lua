@@ -1,4 +1,4 @@
-package.path = "./?.lua;" .. package.path
+package.path = "./device/?.lua;" .. package.path
 
 local smsLoaded = false
 local callLoaded = false
