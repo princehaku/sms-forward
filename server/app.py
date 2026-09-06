@@ -63,6 +63,7 @@ DEFAULT_SMS_TEMPLATE_BODY = (
     "时间：{{time}}\n"
     "内容：{{sms}}"
 )
+DEFAULT_CALL_TEMPLATE_BODY = "未接来电\n设备：{{device}}\n接收卡：{{receiver}}\n来电号码：{{ori}}\n入库时间：{{time}}"
 SMS_TEMPLATE_PLACEHOLDERS = frozenset(
     {"ori", "sms", "receiver", "phone", "time", "device"}
 )
@@ -362,6 +363,11 @@ def init_db():
         device_columns = {
             row["name"] for row in db.execute("PRAGMA table_info(devices)")
         }
+        for field in ("sms_forward_enabled", "call_forward_enabled"):
+            if field not in device_columns:
+                db.execute(f"ALTER TABLE devices ADD COLUMN {field} INTEGER NOT NULL DEFAULT 1")
+        db.execute("CREATE TABLE IF NOT EXISTS call_template (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)")
+        db.execute("INSERT OR IGNORE INTO call_template(id, body) VALUES (1, ?)", (DEFAULT_CALL_TEMPLATE_BODY,))
         if "traffic_total_bytes" not in device_columns:
             db.execute(
                 "ALTER TABLE devices ADD COLUMN traffic_total_bytes "
@@ -835,7 +841,7 @@ def render_sms_template(template_body, message, current_device_phone=None):
         "sms": message["body"],
         "receiver": message["device_phone"] or message["device_label"],
         "phone": current_device_phone or "未录入",
-        "time": message["sms_time"] or message["received_at"],
+        "time": message["received_at"] if record_value(message, "event_type", "sms") == "missed_call" else message["sms_time"] or message["received_at"],
         "device": message["device_label"],
     }
     return SMS_TEMPLATE_PATTERN.sub(
@@ -894,14 +900,8 @@ def record_value(record, key, default=None):
 
 
 def formatted_feishu_message(message, template_body=None):
-    if record_value(message, "event_type", "sms") == "missed_call":
-        return (
-            "未接来电\n"
-            f"设备：{message['device_label']}\n"
-            f"接收卡：{record_value(message, 'device_phone', '') or '未录入'}\n"
-            f"来电号码：{message['sender'] or '未知'}\n"
-            f"入库时间：{message['received_at']}"
-        )
+    if record_value(message, "event_type", "sms") == "missed_call" and template_body is None:
+        template_body = DEFAULT_CALL_TEMPLATE_BODY
     if template_body is not None:
         return render_sms_template(
             template_body,
@@ -1525,6 +1525,12 @@ def upsert_device(db, data, remote_ip=None):
 
 
 def queue_deliveries(db, message_id, device_id):
+    event = db.execute("SELECT event_type FROM messages WHERE id=?", (message_id,)).fetchone()
+    device = db.execute("SELECT sms_forward_enabled, call_forward_enabled FROM devices WHERE id=?", (device_id,)).fetchone()
+    field = "call_forward_enabled" if event and event["event_type"] == "missed_call" else "sms_forward_enabled"
+    if device and not device[field]:
+        db.execute("UPDATE messages SET status='stored' WHERE id=?", (message_id,))
+        return 0
     rows = db.execute(
         """
         SELECT DISTINCT d.id
@@ -2345,6 +2351,7 @@ def admin_snapshot():
             """
         ).fetchall()]
         sms_templates = list_sms_templates(db)
+        call_template = resolve_call_template_body(db)
         mcp_tokens = list_mcp_tokens(db)
         stats = {
             "devices": len(devices),
@@ -2381,6 +2388,7 @@ def admin_snapshot():
             "deliveries": deliveries,
             "outbound_sms": outbound_sms,
             "sms_templates": sms_templates,
+            "call_template": call_template,
             "mcp_tokens": mcp_tokens,
             "offline_seconds": OFFLINE_SECONDS,
         }
@@ -2598,17 +2606,39 @@ def update_device(device_id):
     if denied:
         return denied
     data = request_json()
+    fields = {}
+    for key, limit in (("name", 120), ("phone_number", 40)):
+        if key in data:
+            fields[key] = text_value(data[key], limit)
+    for key in ("sms_forward_enabled", "call_forward_enabled"):
+        if key in data:
+            if type(data[key]) is not bool:
+                return jsonify({"code": 400, "message": key + " must be boolean"}), 400
+            fields[key] = int(data[key])
     with db_connect() as db:
-        cursor = db.execute(
-            "UPDATE devices SET name=?, phone_number=? WHERE id=?",
-            (
-                text_value(data.get("name"), 120),
-                text_value(data.get("phone_number"), 40),
-                device_id,
-            ),
-        )
-    if cursor.rowcount == 0:
-        return jsonify({"code": 404, "message": "device not found"}), 404
+        if not db.execute("SELECT 1 FROM devices WHERE id=?", (device_id,)).fetchone():
+            return jsonify({"code": 404, "message": "device not found"}), 404
+        if fields:
+            db.execute("UPDATE devices SET " + ", ".join(key + "=?" for key in fields) + " WHERE id=?", (*fields.values(), device_id))
+    return jsonify({"code": 0})
+
+
+def resolve_call_template_body(db):
+    row = db.execute("SELECT body FROM call_template WHERE id=1").fetchone()
+    return row["body"] if row else DEFAULT_CALL_TEMPLATE_BODY
+
+
+@app.put("/api/admin/call-template")
+def save_call_template():
+    denied = require_admin()
+    if denied:
+        return denied
+    try:
+        body = validate_sms_template_body(request_json().get("body"))
+    except ValueError as exc:
+        return jsonify({"code": 400, "message": str(exc)}), 400
+    with db_connect() as db:
+        db.execute("UPDATE call_template SET body=? WHERE id=1", (body,))
     return jsonify({"code": 0})
 
 
@@ -3584,16 +3614,9 @@ def forwarded_sms_content(
     db, message, template_id=None, current_device_phone=None
 ):
     if record_value(message, "event_type", "sms") == "missed_call":
-        content = (
-            "未接来电\n"
-            f"接收卡：{message['device_phone'] or message['device_label']}\n"
-            f"来电号码：{message['sender'] or '未知'}\n"
-            f"入库时间：{message['received_at']}"
-        )
+        content = render_sms_template(resolve_call_template_body(db), message, current_device_phone)
         if len(content) > MAX_OUTBOUND_SMS_LENGTH:
-            raise ValueError(
-                f"forwarded SMS exceeds {MAX_OUTBOUND_SMS_LENGTH} characters"
-            )
+            raise ValueError(f"forwarded SMS exceeds {MAX_OUTBOUND_SMS_LENGTH} characters")
         return content
     content = render_sms_template(
         resolve_sms_template_body(db, template_id),
@@ -3765,11 +3788,11 @@ def process_delivery(delivery_id):
                 )
             refresh_message_status(db, row["message_id"])
             return
-        if row["kind"] in {"feishu_app", "feishu_webhook"}:
+        if row["kind"] in {"feishu_app", "feishu_webhook"} or row["event_type"] == "missed_call":
             config = json.loads(row["config_json"] or "{}")
             formatted_message = formatted_feishu_message(
                 row,
-                resolve_sms_template_body(db, config.get("template_id")),
+                resolve_call_template_body(db) if row["event_type"] == "missed_call" else resolve_sms_template_body(db, config.get("template_id")),
             )
         db.execute(
             "UPDATE deliveries SET status='sending', last_attempt_at=? WHERE id=?",

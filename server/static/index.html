@@ -50,7 +50,7 @@
       <button class="btn tab" data-page="messages">短信</button>
       <button class="btn tab" data-page="calls">来电</button>
       <button class="btn tab" data-page="send">发短信</button>
-      <button class="btn tab" data-page="templates">短信模板</button>
+      <button class="btn tab" data-page="templates">转发模板</button>
       <button class="btn tab" data-page="devices">设备</button>
       <button class="btn tab" data-page="routing">转发配置</button>
       <button class="btn tab" data-page="deliveries">转发记录</button>
@@ -80,7 +80,7 @@
       </div>
     </section>
     <section class="page" id="page-messages"><div class="card"><h2>短信归档</h2><div id="messagesTable"></div></div></section>
-    <section class="page" id="page-calls"><div class="card"><h2>来电记录</h2><p class="hint">板子不提供接听功能，所有呼入都会立即挂断并转发。</p><div id="callsTable"></div></div></section>
+    <section class="page" id="page-calls"><div class="card"><h2>来电记录</h2><p class="hint">板子不提供接听功能，所有呼入都会立即挂断并归档；开启电话通知转发后按通道组发送通知。</p><div id="callsTable"></div></div></section>
     <section class="page" id="page-send">
       <div class="card">
         <h2>发送短信</h2>
@@ -95,6 +95,12 @@
       <div class="card"><h2>发送记录</h2><div id="outboundTable"></div></div>
     </section>
     <section class="page" id="page-templates">
+      <div class="card"><h2>电话转发模板（未接来电通知）</h2>
+        <p class="hint">用于飞书、企业微信群和短信来电通知。支持 {{ori}} 来电号码、{{receiver}} 接收卡、{{phone}} 当前设备号码、{{time}} 时间、{{device}} 设备名称、{{sms}} 事件内容。</p>
+        <form id="callTemplateForm" class="form-grid"><div class="field full"><label>模板内容</label><textarea id="callTemplateBody" maxlength="4000" required></textarea></div>
+        <div class="field full"><label>示例预览</label><pre id="callTemplatePreview" class="template-preview"></pre></div>
+        <div><button class="btn primary">保存电话模板</button></div></form>
+      </div>
       <div class="card">
         <h2>短信转发模板</h2>
         <p class="hint">短信转发到手机号或飞书时使用。未指定模板的转发目标会自动使用默认模板。</p>
@@ -120,7 +126,7 @@
         <div id="smsTemplatesTable" style="margin-top:16px"></div>
       </div>
     </section>
-    <section class="page" id="page-devices"><div class="card"><h2>设备管理</h2><div id="devicesTable"></div></div></section>
+    <section class="page" id="page-devices"><div class="card"><h2>设备管理</h2><p class="hint">短信和电话通知可分别开启转发，按已配置的通道组发送。关闭后仍会归档，仅影响新收到的事件。</p><div id="devicesTable"></div></div></section>
     <section class="page" id="page-routing">
       <div class="grid2">
         <div class="card">
@@ -277,7 +283,7 @@
       $('messagesTable').innerHTML=table(['ID','设备','接收手机号','发送号码','短信时间','内容','状态','入库时间'],state.messages.map(m=>`<tr><td>${m.id}</td><td>${esc(m.device_label)}</td><td class="mono"><b>${esc(m.device_phone||'未录入')}</b></td><td class="mono">${esc(m.sender||'未知')}</td><td>${esc(m.sms_time||'—')}</td><td class="body-cell">${esc(m.body)}</td><td>${pill(m.status)}</td><td>${fmt(m.received_at)}</td></tr>`));
       $('callsTable').innerHTML=table(['ID','设备','接收手机号','来电号码','状态','入库时间'],(state.missed_calls||[]).map(c=>`<tr><td>${c.id}</td><td>${esc(c.device_label)}</td><td class="mono"><b>${esc(c.device_phone||'未录入')}</b></td><td class="mono">${esc(c.sender||'未知')}</td><td>${pill(c.status)}</td><td>${fmt(c.received_at)}</td></tr>`));
       $('outboundTable').innerHTML=table(['ID','来源','发送设备','发送卡号','收件手机号','内容','状态','入队时间','板子领取','发送完成','错误','操作'],(state.outbound_sms||[]).map(o=>`<tr><td>${o.id}</td><td>${o.source_delivery_id?`自动转发 #${o.source_delivery_id}<div class="muted small">${esc(o.source_destination_name||'')}</div>`:o.feishu_reply_event_id?`飞书群回复<div class="muted small">${esc(o.feishu_reply_destination_name||'')}</div>`:o.mcp_request_id?`MCP<div class="mono muted small">${esc(o.mcp_request_id)}</div>`:'控制台'}</td><td>${esc(o.device_label)}</td><td class="mono">${esc(o.device_phone||'未录入')}</td><td class="mono"><b>${esc(o.recipient)}</b></td><td class="body-cell">${esc(o.body)}</td><td>${pill(outboundStatusLabels[o.status]||o.status,o.status)}${o.feishu_reply_event_id?`<div class="muted small">飞书回执：${esc(o.feishu_notified_status||'等待')}</div>`:''}</td><td>${fmt(o.created_at)}</td><td>${fmt(o.dispatched_at)}</td><td>${fmt(o.sent_at||o.completed_at)}</td><td class="body-cell">${esc(o.last_error||o.feishu_notification_error||'—')}</td><td>${o.status==='pending'?`<button class="btn danger small" onclick="deleteOutbound(${o.id})">删除</button>`:['failed','unknown'].includes(o.status)?`<button class="btn small" onclick="retryOutbound(${o.id})">重新入队</button>`:''}</td></tr>`));
-      $('devicesTable').innerHTML=table(['状态','名称','SIM 手机号','设备 ID','版本','网络','信号','累计估算流量','板端队列','最后心跳','操作'],state.devices.map(d=>`<tr><td>${pill(d.online?'在线':'离线',d.online?'online':'offline')}</td><td><b>${esc(d.name||'未命名')}</b></td><td class="mono"><b>${esc(d.phone_number||'未录入')}</b></td><td class="mono">${esc(d.id)}</td><td><div class="mono">脚本：${esc(d.app_version||'未上报')}</div><div class="muted small">固件：${esc(d.firmware||'未上报')}</div></td><td>${esc(d.network||'—')}</td><td>${d.signal??'—'}</td><td>${d.traffic_session_id?`<b class="mono">${trafficKb(d.traffic_total_bytes)} KB</b><div class="muted small">上报：${fmt(d.traffic_updated_at)}</div>`:'<span class="muted">等待板端上报</span>'}</td><td>${d.queue_count}</td><td>${fmt(d.last_seen)}</td><td><button class="btn small" onclick="editDevice('${esc(d.id)}')">编辑</button></td></tr>`));
+      $('devicesTable').innerHTML=table(['状态','名称','SIM 手机号','设备 ID','版本','网络','信号','累计估算流量','板端队列','最后心跳','短信转发','电话通知转发','操作'],state.devices.map(d=>`<tr><td>${pill(d.online?'在线':'离线',d.online?'online':'offline')}</td><td><b>${esc(d.name||'未命名')}</b></td><td class="mono"><b>${esc(d.phone_number||'未录入')}</b></td><td class="mono">${esc(d.id)}</td><td><div class="mono">脚本：${esc(d.app_version||'未上报')}</div><div class="muted small">固件：${esc(d.firmware||'未上报')}</div></td><td>${esc(d.network||'—')}</td><td>${d.signal??'—'}</td><td>${d.traffic_session_id?`<b class="mono">${trafficKb(d.traffic_total_bytes)} KB</b><div class="muted small">上报：${fmt(d.traffic_updated_at)}</div>`:'<span class="muted">等待板端上报</span>'}</td><td>${d.queue_count}</td><td>${fmt(d.last_seen)}</td><td><button class="btn small" onclick="toggleDeviceForward('${esc(d.id)}','sms_forward_enabled')">${d.sms_forward_enabled?'已开启 · 关闭':'已关闭 · 开启'}</button></td><td><button class="btn small" onclick="toggleDeviceForward('${esc(d.id)}','call_forward_enabled')">${d.call_forward_enabled?'已开启 · 关闭':'已关闭 · 开启'}</button></td><td><button class="btn small" onclick="editDevice('${esc(d.id)}')">编辑</button></td></tr>`));
       $('destinationsTable').innerHTML=table(['名称','类型','状态','操作'],state.destinations.map(d=>`<tr><td>${esc(d.name)}${d.kind==='sms_forward'?`<div class="mono small">${esc(d.config.recipient||'')}</div>`:''}${templatedDestinationKinds.has(d.kind)?`<div class="muted small">${esc(smsTemplateName(d.config.template_id))}</div>`:''}${d.kind==='feishu_app'?`<div class="muted small">群回复 → SMS（${d.config.verification_token?'事件推送 + 10 秒轮询':'10 秒轮询'}）</div>`:''}</td><td>${esc(destinationKindLabels[d.kind]||d.kind)}</td><td>${pill(d.enabled?'启用':'停用',d.enabled?'online':'offline')}</td><td><button class="btn small" onclick="editDestination(${d.id})">编辑</button> <button class="btn danger small" onclick="deleteDestination(${d.id})">删除</button></td></tr>`));
       const deviceById=Object.fromEntries(state.devices.map(device=>[device.id,device]));
       const destinationById=Object.fromEntries(state.destinations.map(destination=>[destination.id,destination]));
@@ -295,9 +301,14 @@
       refillMultiSelect($('channelGroupDevices'),state.devices.map(device=>({value:device.id,label:`${device.phone_number||'未录入手机号'} / ${device.name||device.id}`})));
       refillMultiSelect($('channelGroupDestinations'),state.destinations.map(destination=>({value:String(destination.id),label:`${destination.name} / ${destinationKindLabels[destination.kind]||destination.kind}`})));
       if(!$('smsTemplateId').value&&!$('smsTemplateBody').value&&defaultTemplate){$('smsTemplateBody').value=defaultTemplate.body;updateSmsTemplatePreview()}
+      if(!$('callTemplateBody').dataset.dirty){$('callTemplateBody').value=state.call_template||'';updateCallTemplatePreview()}
       applyTableLabels();
     }
     async function refresh(){state=await api('admin/snapshot');render()}
+    window.toggleDeviceForward=async(id,field)=>{try{const d=state.devices.find(x=>x.id===id);await api(`admin/devices/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify({[field]:!d[field]})});toast('转发开关已保存，仅影响新收到的事件');await refresh()}catch(err){toast(err.message)}};
+    function updateCallTemplatePreview(){const values={ori:'13800138000',receiver:'接收卡',phone:'当前设备号码',time:'2026-09-06 12:00:00',device:'示例设备',sms:'未接来电'};$('callTemplatePreview').textContent=$('callTemplateBody').value.replace(/\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}/g,(match,key)=>values[key]??match)}
+    $('callTemplateBody').oninput=()=>{$('callTemplateBody').dataset.dirty='1';updateCallTemplatePreview()};
+    $('callTemplateForm').onsubmit=async e=>{e.preventDefault();try{await api('admin/call-template',{method:'PUT',body:JSON.stringify({body:$('callTemplateBody').value})});delete $('callTemplateBody').dataset.dirty;toast('电话转发模板已保存');await refresh()}catch(err){toast(err.message)}};
     window.editDevice=async id=>{const d=state.devices.find(x=>x.id===id);const name=prompt('设备名称',d.name||'');if(name===null)return;const phone=prompt('SIM 手机号',d.phone_number||'');if(phone===null)return;await api(`admin/devices/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify({name,phone_number:phone})});toast('设备已更新');refresh()}
     window.editDestination=id=>{const d=state.destinations.find(x=>x.id===id);const config={...d.config};$('destinationId').value=d.id;$('destinationName').value=d.name;$('destinationKind').value=d.kind;$('destinationEnabled').value=String(d.enabled);$('destinationTemplate').value=config.template_id?String(config.template_id):'';delete config.template_id;updateDestinationConfigHint();$('destinationConfig').value=JSON.stringify(config,null,2);window.scrollTo({top:0,behavior:'smooth'})}
     window.deleteDestination=async id=>{if(!confirm('删除目标及其所有路由和转发记录？'))return;await api(`admin/destinations/${id}`,{method:'DELETE'});toast('目标已删除');refresh()}

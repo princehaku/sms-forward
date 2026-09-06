@@ -47,6 +47,47 @@ class SmsCenterTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.temp_dir.cleanup()
 
+    def test_device_forward_switches_and_call_template(self):
+        headers = {"X-SMS-Admin-Token": "admin-test"}
+        device_id = "dev-forward-switches"
+        self.client.post("/api/device/register", json={"token": "sms-sb", "device_id": device_id, "name": "keep name"})
+        destination = self.client.post("/api/admin/destinations", headers=headers, json={"name": "switch target", "kind": "feishu_webhook", "config": {"url": "https://example.com/test"}}).json["id"]
+        self.client.post("/api/admin/routes", headers=headers, json={"device_id": device_id, "destination_id": destination})
+        endpoint = "/api/admin/devices/" + device_id
+        self.assertEqual(self.client.patch(endpoint, headers=headers, json={"sms_forward_enabled": "false"}).status_code, 400)
+        self.assertEqual(self.client.patch(endpoint, headers=headers, json={"sms_forward_enabled": False}).status_code, 200)
+        def queue(event, key):
+            with self.module.db_connect() as db:
+                cursor = db.execute("INSERT INTO messages(device_id, message_key, event_type, sender, body, received_at, status) VALUES (?, ?, ?, '12345', 'content', ?, 'stored')", (device_id, key, event, self.module.utc_now()))
+                return self.module.queue_deliveries(db, cursor.lastrowid, device_id)
+        self.assertEqual(queue("sms", "disabled-sms"), 0)
+        self.assertEqual(queue("missed_call", "enabled-call"), 1)
+        self.client.patch(endpoint, headers=headers, json={"sms_forward_enabled": True, "call_forward_enabled": False})
+        self.module.init_db()
+        self.assertEqual(queue("sms", "enabled-sms"), 1)
+        self.assertEqual(queue("missed_call", "disabled-call"), 0)
+        with self.module.db_connect() as db:
+            self.assertEqual(db.execute("SELECT name FROM devices WHERE id=?", (device_id,)).fetchone()["name"], "keep name")
+        template = "电话 {{ori}} / {{device}} / {{time}}"
+        self.assertEqual(self.client.put("/api/admin/call-template", json={"body": template}).status_code, 401)
+        self.assertEqual(self.client.put("/api/admin/call-template", headers=headers, json={"body": "{{invalid}}"}).status_code, 400)
+        original = self.client.get("/api/admin/snapshot", headers=headers).json["call_template"]
+        try:
+            self.assertEqual(self.client.put("/api/admin/call-template", headers=headers, json={"body": template}).status_code, 200)
+            self.module.init_db()
+            self.assertEqual(self.client.get("/api/admin/snapshot", headers=headers).json["call_template"], template)
+            message = {"event_type": "missed_call", "sender": "12345", "device_label": "board", "device_phone": "", "body": "未接来电", "sms_time": "", "received_at": "today"}
+            with self.module.db_connect() as db:
+                rendered = self.module.forwarded_sms_content(db, message)
+                self.assertEqual(rendered, "电话 12345 / board / today")
+                self.assertEqual(self.module.formatted_feishu_message(message, self.module.resolve_call_template_body(db)), rendered)
+                delivery_id = db.execute("SELECT dl.id FROM deliveries dl JOIN messages m ON m.id=dl.message_id WHERE m.device_id=? AND m.event_type='missed_call'", (device_id,)).fetchone()["id"]
+            with patch.object(self.module, "deliver", return_value=(True, 200, "", "{}")) as send:
+                self.module.process_delivery(delivery_id)
+                self.assertTrue(send.call_args.kwargs["formatted_message"].startswith("电话 12345 / keep name / "))
+        finally:
+            self.client.put("/api/admin/call-template", headers=headers, json={"body": original})
+
     def test_health_and_device_auth(self):
         self.assertEqual(self.client.get("/api/health").status_code, 200)
         denied = self.client.post("/api/device/register", json={"device_id": "dev-1"})
@@ -1979,7 +2020,7 @@ class SmsCenterTest(unittest.TestCase):
         self.assertIn('data-page="calls"', console)
         self.assertIn('id="page-calls"', console)
         self.assertIn("来电记录", console)
-        self.assertIn("所有呼入都会立即挂断并转发", console)
+        self.assertIn("开启电话通知转发后按通道组发送通知", console)
         self.assertNotIn("'呼入时间','挂断时间','响铃时长'", console)
         self.assertIn("脚本：${esc(d.app_version||'未上报')}", console)
         self.assertIn("固件：${esc(d.firmware||'未上报')}", console)
