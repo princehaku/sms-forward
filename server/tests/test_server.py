@@ -2014,7 +2014,7 @@ class SmsCenterTest(unittest.TestCase):
         self.assertIn("fmt(d.delivered_at||d.forward_sent_at)", console)
         self.assertIn("通道组", console)
         self.assertIn("企业微信群机器人", console)
-        self.assertIn("发短信", console)
+        self.assertIn("发送短信", console)
         self.assertIn("outbound-sms", console)
         self.assertIn("deleteOutbound", console)
         self.assertIn('data-page="calls"', console)
