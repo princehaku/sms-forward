@@ -84,7 +84,7 @@
       </nav>
       <div class="sidebar-footer">
         <div class="sync-heading" role="status"><span class="sync-dot" id="syncDot" data-status="idle" aria-hidden="true"></span><span id="syncStatus">等待登录</span></div>
-        <p class="sync-meta"><span id="syncTime">登录后读取设备与消息</span><br>数据每 30 秒自动刷新</p>
+        <p class="sync-meta"><span id="syncTime">登录后读取设备与消息</span><br>数据每 5 秒自动刷新</p>
       </div>
     </aside>
     <main class="content" id="mainContent" tabindex="-1">
@@ -418,7 +418,7 @@
     $('mcpEndpoint').value=new URL('mcp/',location.href).href;
     activatePage(location.hash.slice(1));
     if(token)refresh().then(loadPushState).catch(()=>{setLoginVisible(true)});else setLoginVisible(true);
-    setInterval(()=>{if(token)refresh().catch(()=>{})},30000);
+    setInterval(()=>{if(token&&!$('refreshBtn').disabled)refresh().catch(()=>{})},5000);
   </script>
 </body>
 </html>
