@@ -96,7 +96,7 @@
     <section class="stats" id="stats"></section>
 
     <section class="page active" id="page-overview">
-      <div class="card">
+      <div class="card hidden" id="pushCard">
         <h2>Chrome 消息通知</h2>
         <p class="hint" id="pushStatus">正在检查当前浏览器的通知状态…</p>
         <div class="notification-settings">
@@ -132,11 +132,25 @@
       <div class="card"><h2>发送记录</h2><div id="outboundTable"></div></div>
     </section>
     <section class="page" id="page-templates">
-      <div class="card"><h2>电话转发模板（未接来电通知）</h2>
-        <p class="hint">用于飞书、企业微信群和短信来电通知。支持 {{ori}} 来电号码、{{receiver}} 接收卡、{{phone}} 当前设备号码、{{time}} 时间、{{device}} 设备名称、{{sms}} 事件内容。</p>
-        <form id="callTemplateForm" class="form-grid"><div class="field full"><label>模板内容</label><textarea id="callTemplateBody" maxlength="4000" required></textarea></div>
-        <div class="field full"><label>示例预览</label><pre id="callTemplatePreview" class="template-preview"></pre></div>
-        <div><button class="btn primary">保存电话模板</button></div></form>
+      <div class="card"><h2>来电通知模板</h2>
+        <p class="hint" id="callTemplateHint">用于飞书、企业微信群和短信来电通知。支持 {{ori}} 来电号码、{{receiver}} 接收卡、{{phone}} 当前设备号码、{{time}} 时间、{{device}} 设备名称、{{sms}} 事件内容。</p>
+        <form id="callTemplateForm" class="form-grid">
+          <input type="hidden" id="callTemplateId">
+          <div class="field hidden" id="callTemplateNameField"><label>模板名称</label><input id="callTemplateName" maxlength="120" required disabled placeholder="例如：简洁来电通知"></div>
+          <div class="field hidden" id="callTemplateDefaultField"><label>模板类型</label><select id="callTemplateDefault" disabled><option value="false">普通模板</option><option value="true">设为默认模板</option></select></div>
+          <div class="field full"><label>模板内容</label><textarea id="callTemplateBody" maxlength="4000" required></textarea><div class="muted small right"><span id="callTemplateCount">0 字</span></div></div>
+          <div class="field full"><label>可用占位符</label><div class="placeholder-bar">
+            <button class="btn small" type="button" data-call-template-placeholder="{{ori}}">{{ori}} 来电号码</button>
+            <button class="btn small" type="button" data-call-template-placeholder="{{receiver}}">{{receiver}} 接收卡</button>
+            <button class="btn small" type="button" data-call-template-placeholder="{{phone}}">{{phone}} 当前设备号码</button>
+            <button class="btn small" type="button" data-call-template-placeholder="{{time}}">{{time}} 来电时间</button>
+            <button class="btn small" type="button" data-call-template-placeholder="{{device}}">{{device}} 设备名称</button>
+            <button class="btn small" type="button" data-call-template-placeholder="{{sms}}">{{sms}} 事件内容</button>
+          </div></div>
+          <div class="field full"><label>示例预览</label><pre id="callTemplatePreview" class="secret-box template-preview"></pre></div>
+          <div class="field full"><div class="actions"><button class="btn primary">保存来电模板</button><button class="btn hidden" type="button" id="callTemplateCancel">新增模板</button></div></div>
+        </form>
+        <div id="callTemplatesTable" class="hidden" style="margin-top:16px"></div>
       </div>
       <div class="card">
         <h2>短信转发模板</h2>
@@ -174,6 +188,7 @@
             <div class="field"><label>名称</label><input id="destinationName" required placeholder="例如：运维群"></div>
             <div class="field"><label>类型</label><select id="destinationKind"><option value="feishu_app">飞书应用机器人</option><option value="feishu_webhook">飞书自定义 Webhook</option><option value="wecom_webhook">企业微信群机器人</option><option value="sms_forward">短信转发到手机号</option><option value="webhook">通用 Webhook</option></select></div>
             <div class="field full hidden" id="destinationTemplateField"><label>消息模板</label><select id="destinationTemplate"></select><div class="muted small">短信转发和飞书通道均可选择；“使用默认模板”会跟随默认模板的后续调整。</div></div>
+            <div class="field full hidden" id="destinationCallTemplateField"><label>来电通知模板</label><select id="destinationCallTemplate"></select><div class="muted small">未接来电转发时使用；“使用默认模板”会跟随默认模板的后续调整。</div></div>
             <div class="field full"><label>配置 JSON</label><textarea id="destinationConfig" class="mono" required></textarea><div class="muted small" id="destinationConfigHint"></div></div>
             <div class="field"><label>状态</label><select id="destinationEnabled"><option value="true">启用</option><option value="false">停用</option></select></div>
             <div class="field" style="justify-content:end"><button class="btn primary">保存目标</button></div>
@@ -187,6 +202,7 @@
             <input type="hidden" id="channelGroupId">
             <div class="field"><label>通道组名称</label><input id="channelGroupName" required placeholder="例如：门店告警"></div>
             <div class="field"><label>状态</label><select id="channelGroupEnabled"><option value="true">启用</option><option value="false">停用</option></select></div>
+            <div class="field full hidden" id="channelGroupEventTypeField"><label>转发事件</label><select id="channelGroupEventType"><option value="both">短信与未接来电</option><option value="sms">仅短信</option><option value="missed_call">仅未接来电</option></select><div class="muted small">仅转发所选类型的新事件；设备对应的转发开关也需开启。</div></div>
             <div class="field full"><label>说明</label><input id="channelGroupDescription" placeholder="可选"></div>
             <div class="field"><label>接收手机号 / 设备（可多选）</label><select id="channelGroupDevices" multiple></select></div>
             <div class="field"><label>转发目标（可多选）</label><select id="channelGroupDestinations" multiple></select></div>
@@ -196,7 +212,11 @@
         </div>
       </div>
     </section>
-    <section class="page" id="page-deliveries"><div class="card"><h2>转发记录</h2><div id="deliveriesTable"></div></div></section>
+    <section class="page" id="page-deliveries"><div class="card"><h2>转发记录</h2>
+      <div class="field full" style="margin-bottom:14px"><label>搜索当前载入记录</label><input id="deliveriesSearch" type="search" placeholder="按设备、手机号、目标名称、状态或错误信息搜索"></div>
+      <div id="deliveriesTable"></div>
+      <div class="actions" style="justify-content:space-between;align-items:center;margin-top:12px"><button class="btn small" type="button" id="deliveriesPrev">上一页</button><span class="muted small" id="deliveriesPageInfo"></span><button class="btn small" type="button" id="deliveriesNext">下一页</button></div>
+    </div></section>
     <section class="page" id="page-mcp">
       <div class="card">
         <h2>MCP</h2>
@@ -227,7 +247,8 @@
   </div>
   <div class="toast" id="toast"></div>
   <script>
-    let token=localStorage.getItem('smsAdminToken')||'', state=null, pushConfig=null, pushSubscription=null, lastSyncAt=null, deviceRevision=0, focusedForwardKey=null;
+    let token=localStorage.getItem('smsAdminToken')||'', state=null, pushConfig=null, pushSubscription=null, lastSyncAt=null, deviceRevision=0, focusedForwardKey=null, deliveriesPage=1, pushCleanupStarted=false;
+    const DELIVERIES_PAGE_SIZE=25;
     const forwardOperations=new Map();
     const $=id=>document.getElementById(id);
     const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -243,6 +264,19 @@
     }
     async function login(value){const res=await fetch('api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:value})});if(!res.ok)throw new Error('Token 错误');token=value;localStorage.setItem('smsAdminToken',value);setLoginVisible(false);$('refreshBtn').focus();await refresh();await loadPushState()}
     const pushSupported=()=>window.isSecureContext&&'serviceWorker' in navigator&&'PushManager' in window&&'Notification' in window;
+    const supportsCallTemplates=()=>Array.isArray(state?.call_templates);
+    function removeLegacyBrowserPush(){
+      if(pushCleanupStarted||!('serviceWorker' in navigator))return;pushCleanupStarted=true;
+      const appScope=new URL('./',location.href).href;
+      navigator.serviceWorker.getRegistrations().then(registrations=>Promise.allSettled(registrations.filter(registration=>registration.scope===appScope).map(async registration=>{const subscription=await registration.pushManager?.getSubscription();if(subscription)await subscription.unsubscribe();await registration.unregister()}))).catch(()=>{});
+    }
+    function updateBackendFeatures(){
+      const modern=supportsCallTemplates();$('pushCard').classList.toggle('hidden',modern);
+      for(const id of ['callTemplateNameField','callTemplateDefaultField','callTemplateCancel','callTemplatesTable','channelGroupEventTypeField'])$(id).classList.toggle('hidden',!modern);
+      $('callTemplateName').disabled=!modern;$('callTemplateDefault').disabled=!modern;$('channelGroupEventType').disabled=!modern;
+      $('callTemplateHint').textContent=modern?'用于飞书、企业微信群和短信来电通知。未指定来电模板的目标使用默认模板，可新增模板并为各目标单独选择。':'用于飞书、企业微信群和短信来电通知。保存后使用此全局模板。支持 {{ori}}、{{receiver}}、{{phone}}、{{time}}、{{device}} 和 {{sms}}。';
+      updateDestinationConfigHint();if(modern){pushConfig=null;pushSubscription=null;removeLegacyBrowserPush()}
+    }
     function pushPublicKeyBytes(value){const padding='='.repeat((4-value.length%4)%4);const raw=atob((value+padding).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from([...raw].map(char=>char.charCodeAt(0)))}
     function pushKeyMatches(subscription,publicKey){const current=subscription?.options?.applicationServerKey;if(!current)return false;const expected=pushPublicKeyBytes(publicKey);const actual=new Uint8Array(current);return actual.length===expected.length&&actual.every((value,index)=>value===expected[index])}
     async function pushRegistration(){await navigator.serviceWorker.register('service-worker.js');return navigator.serviceWorker.ready}
@@ -262,6 +296,7 @@
       await api('admin/web-push/subscriptions',{method:'POST',body:JSON.stringify({subscription:pushSubscription.toJSON(),preferences:{sms:$('pushSms').checked,missed_call:$('pushMissedCall').checked}})});
     }
     async function loadPushState(){
+      if(supportsCallTemplates()){removeLegacyBrowserPush();return}
       if(!pushSupported()){renderPushState();return}
       try{
         pushConfig=await api('admin/web-push/config');
@@ -307,13 +342,17 @@
     function table(headers,rows){return rows.length?`<div class="table-wrap"><table><thead><tr>${headers.map(x=>`<th>${x}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`:'<div class="empty">暂无数据</div>'}
     const destinationKindLabels={feishu_app:'飞书应用机器人',feishu_webhook:'飞书自定义 Webhook',wecom_webhook:'企业微信群机器人',sms_forward:'短信转发到手机号',webhook:'通用 Webhook'};
     const templatedDestinationKinds=new Set(['sms_forward','feishu_app','feishu_webhook']);
+    const callTemplatedDestinationKinds=new Set(['sms_forward','feishu_app','feishu_webhook','wecom_webhook']);
     const outboundStatusLabels={pending:'等待板子领取',sending:'板子发送中',sent:'发送成功',failed:'发送失败',unknown:'状态未知'};
     const mcpTokenStatusLabels={active:'有效',expired:'已过期',revoked:'已撤销'};
     const eventTypeLabels={sms:'短信',missed_call:'未接来电'};
+    const routingEventTypeLabels={both:'短信与未接来电',sms:'仅短信',missed_call:'仅未接来电'};
+    const deliveryMatchesSearch=(delivery,term)=>!term||[delivery.device_label,delivery.device_phone,delivery.destination_name,delivery.forward_recipient,delivery.sender,delivery.status,outboundStatusLabels[delivery.outbound_status]||delivery.outbound_status,eventTypeLabels[delivery.event_type]||delivery.event_type,delivery.last_error].map(value=>String(value??'').toLowerCase()).join(' ').includes(term);
     const smsParts=text=>{if(!text)return 0;const ascii=/^[\x20-\x7e\r\n]*$/.test(text);const single=ascii?160:70;const joined=ascii?153:67;return text.length<=single?1:Math.ceil(text.length/joined)};
     const updateOutboundCount=()=>{const text=$('outboundBody').value;$('outboundCount').textContent=`${text.length} 字，预计 ${smsParts(text)} 条`};
     const tagList=values=>values.length?`<div class="tag-list">${values.map(value=>`<span class="tag">${esc(value)}</span>`).join('')}</div>`:'<span class="muted">未配置</span>';
     const smsTemplateName=id=>{const templates=state?.sms_templates||[];if(id)return templates.find(item=>item.id===Number(id))?.name||`模板 #${id}`;const fallback=templates.find(item=>item.is_default);return fallback?`默认：${fallback.name}`:'默认模板'};
+    const callTemplateName=id=>{const templates=state?.call_templates||[];if(id)return templates.find(item=>item.id===Number(id))?.name||`模板 #${id}`;const fallback=templates.find(item=>item.is_default);return fallback?`默认：${fallback.name}`:'默认模板'};
     function updateSmsTemplatePreview(){const body=$('smsTemplateBody').value;const samples={ori:'13167258815',sms:'【腾讯科技】928662（企业微信验证码，15分钟内有效）',receiver:'15336533423',phone:'18501635881',time:'26/07/28,14:17:54+32',device:'GK21.5PTM'};$('smsTemplatePreview').textContent=body.replace(/\{\{\s*(ori|sms|receiver|phone|time|device)\s*\}\}/g,(_,key)=>samples[key]);$('smsTemplateCount').textContent=`${body.length} 字`}
     function refillMultiSelect(element,options){const selected=new Set([...element.selectedOptions].map(option=>option.value));element.innerHTML=options.map(option=>`<option value="${esc(option.value)}">${esc(option.label)}</option>`).join('');[...element.options].forEach(option=>option.selected=selected.has(option.value))}
     function applyTableLabels(){document.querySelectorAll('.table-wrap table').forEach(tableElement=>{const labels=[...tableElement.querySelectorAll('thead th')].map(cell=>cell.textContent.trim());tableElement.querySelectorAll('tbody tr').forEach(row=>[...row.children].forEach((cell,index)=>cell.dataset.label=labels[index]||''))})}
@@ -345,6 +384,7 @@
     }
     document.addEventListener('focusin',event=>{const button=event.target.closest?.('.forward-toggle');focusedForwardKey=button?forwardKey(button.dataset.deviceId,button.dataset.field):null});
     function render(){
+      updateBackendFeatures();
       const s=state.stats;$('stats').innerHTML=[['登记设备',s.devices],['在线设备',s.online],['接收短信',s.messages],['来电记录',s.missed_calls||0],['待转发记录',s.pending],['转发失败',s.failed]].map(([k,v])=>`<div class="stat"><b>${v}</b><span>${k}</span></div>`).join('');
       $('overviewDevices').innerHTML=state.devices.slice(0,8).map(d=>`<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line)"><div><b>${esc(d.name||'未命名设备')}</b><div class="mono">${esc(d.phone_number||'未录入手机号')}</div><div class="muted small">${esc(d.id)}</div></div><div class="right">${pill(d.online?'在线':'离线',d.online?'online':'offline')}<div class="muted small">${fmt(d.last_seen)}</div></div></div>`).join('')||'<div class="empty">等待设备注册</div>';
       $('overviewMessages').innerHTML=state.messages.slice(0,8).map(m=>`<div style="padding:9px 0;border-bottom:1px solid var(--line)"><div style="display:flex;justify-content:space-between"><b>${esc(m.sender||'未知号码')}</b>${pill(m.status)}</div><div class="mono small">接收卡：${esc(m.device_phone||'未录入手机号')}</div><div class="muted body-cell">${esc(m.body).slice(0,120)}</div></div>`).join('')||'<div class="empty">等待短信上报</div>';
@@ -355,12 +395,17 @@
       const focusedToggle=document.activeElement?.closest('.forward-toggle');const focusedToggleKey=focusedToggle?forwardKey(focusedToggle.dataset.deviceId,focusedToggle.dataset.field):null;
       $('devicesTable').innerHTML=table(['状态','名称','短信转发','电话通知转发','SIM 手机号','设备 ID','版本','网络','信号','累计估算流量','板端队列','最后心跳','操作'],state.devices.map(d=>`<tr><td>${pill(d.online?'在线':'离线',d.online?'online':'offline')}</td><td><b>${esc(d.name||'未命名')}</b></td><td>${forwardToggle(d,'sms_forward_enabled')}</td><td>${forwardToggle(d,'call_forward_enabled')}</td><td class="mono"><b>${esc(d.phone_number||'未录入')}</b></td><td class="mono">${esc(d.id)}</td><td><div class="mono">脚本：${esc(d.app_version||'未上报')}</div><div class="muted small">固件：${esc(d.firmware||'未上报')}</div></td><td>${esc(d.network||'—')}</td><td>${d.signal??'—'}</td><td>${d.traffic_session_id?`<b class="mono">${trafficKb(d.traffic_total_bytes)} KB</b><div class="muted small">上报：${fmt(d.traffic_updated_at)}</div>`:'<span class="muted">等待板端上报</span>'}</td><td>${d.queue_count}</td><td>${fmt(d.last_seen)}</td><td><button class="btn small" onclick="editDevice('${esc(d.id)}')">编辑</button></td></tr>`));
       restoreForwardControls(previousToggles,focusedToggleKey);
-      $('destinationsTable').innerHTML=table(['名称','类型','状态','操作'],state.destinations.map(d=>`<tr><td>${esc(d.name)}${d.kind==='sms_forward'?`<div class="mono small">${esc(d.config.recipient||'')}</div>`:''}${templatedDestinationKinds.has(d.kind)?`<div class="muted small">${esc(smsTemplateName(d.config.template_id))}</div>`:''}${d.kind==='feishu_app'?`<div class="muted small">群回复 → SMS（${d.config.verification_token?'事件推送 + 10 秒轮询':'10 秒轮询'}）</div>`:''}</td><td>${esc(destinationKindLabels[d.kind]||d.kind)}</td><td>${pill(d.enabled?'启用':'停用',d.enabled?'online':'offline')}</td><td><button class="btn small" onclick="editDestination(${d.id})">编辑</button> <button class="btn danger small" onclick="deleteDestination(${d.id})">删除</button></td></tr>`));
+      $('destinationsTable').innerHTML=table(['名称','类型','状态','操作'],state.destinations.map(d=>`<tr><td>${esc(d.name)}${d.kind==='sms_forward'?`<div class="mono small">${esc(d.config.recipient||'')}</div>`:''}${templatedDestinationKinds.has(d.kind)?`<div class="muted small">短信模板：${esc(smsTemplateName(d.config.template_id))}</div>`:''}${supportsCallTemplates()&&callTemplatedDestinationKinds.has(d.kind)?`<div class="muted small">来电模板：${esc(callTemplateName(d.config.call_template_id))}</div>`:''}${d.kind==='feishu_app'?`<div class="muted small">群回复 → SMS（${d.config.verification_token?'事件推送 + 10 秒轮询':'10 秒轮询'}）</div>`:''}</td><td>${esc(destinationKindLabels[d.kind]||d.kind)}</td><td>${pill(d.enabled?'启用':'停用',d.enabled?'online':'offline')}</td><td><button class="btn small" onclick="editDestination(${d.id})">编辑</button> <button class="btn danger small" onclick="deleteDestination(${d.id})">删除</button></td></tr>`));
       const deviceById=Object.fromEntries(state.devices.map(device=>[device.id,device]));
       const destinationById=Object.fromEntries(state.destinations.map(destination=>[destination.id,destination]));
-      $('channelGroupsTable').innerHTML=table(['通道组','接收手机号 / 设备','转发目标','状态','操作'],(state.channel_groups||[]).map(group=>{const deviceLabels=group.device_ids.map(id=>{const device=deviceById[id];return device?(device.phone_number||device.name||id):id});const destinationLabels=group.destination_ids.map(id=>destinationById[id]?.name||`#${id}`);return `<tr><td><b>${esc(group.name)}</b><div class="muted small">${esc(group.description||'')}</div></td><td>${tagList(deviceLabels)}</td><td>${tagList(destinationLabels)}</td><td>${pill(group.enabled?'启用':'停用',group.enabled?'online':'offline')}</td><td><button class="btn small" onclick="editChannelGroup(${group.id})">编辑</button> <button class="btn danger small" onclick="deleteChannelGroup(${group.id})">删除</button></td></tr>`}));
-      $('deliveriesTable').innerHTML=table(['ID','消息','设备','接收手机号','目标','状态','次数','转发时间','最近错误','操作'],state.deliveries.map(d=>`<tr><td>${d.id}</td><td>#${d.message_id}<div class="muted">${esc(eventTypeLabels[d.event_type]||d.event_type)} / ${esc(d.sender||'未知')}</div></td><td>${esc(d.device_label)}</td><td class="mono"><b>${esc(d.device_phone||'未录入')}</b></td><td>${esc(d.destination_name)}${d.forward_recipient?`<div class="mono small">→ ${esc(d.forward_recipient)}</div>`:''}</td><td>${pill(d.status)}${d.outbound_status?`<div class="muted small">${esc(outboundStatusLabels[d.outbound_status]||d.outbound_status)}</div>`:''}</td><td>${d.attempts}</td><td>${fmt(d.delivered_at||d.forward_sent_at)}</td><td class="body-cell">${esc(d.last_error||'—')}</td><td>${d.status==='delivered'?'':`<button class="btn small" onclick="retryDelivery(${d.id})">重试</button>`}</td></tr>`));
+      $('channelGroupsTable').innerHTML=table(['通道组','转发事件','接收手机号 / 设备','转发目标','状态','操作'],(state.channel_groups||[]).map(group=>{const deviceLabels=group.device_ids.map(id=>{const device=deviceById[id];return device?(device.phone_number||device.name||id):id});const destinationLabels=group.destination_ids.map(id=>destinationById[id]?.name||`#${id}`);return `<tr><td><b>${esc(group.name)}</b><div class="muted small">${esc(group.description||'')}</div></td><td>${esc(routingEventTypeLabels[group.event_type||'both']||group.event_type)}</td><td>${tagList(deviceLabels)}</td><td>${tagList(destinationLabels)}</td><td>${pill(group.enabled?'启用':'停用',group.enabled?'online':'offline')}</td><td><button class="btn small" onclick="editChannelGroup(${group.id})">编辑</button> <button class="btn danger small" onclick="deleteChannelGroup(${group.id})">删除</button></td></tr>`}));
+      const searchTerm=$('deliveriesSearch').value.trim().toLowerCase();const filteredDeliveries=state.deliveries.filter(delivery=>deliveryMatchesSearch(delivery,searchTerm));
+      const pageCount=Math.max(1,Math.ceil(filteredDeliveries.length/DELIVERIES_PAGE_SIZE));deliveriesPage=Math.min(Math.max(1,deliveriesPage),pageCount);
+      const deliveriesPageItems=filteredDeliveries.slice((deliveriesPage-1)*DELIVERIES_PAGE_SIZE,deliveriesPage*DELIVERIES_PAGE_SIZE);
+      $('deliveriesTable').innerHTML=table(['ID','消息','设备','接收手机号','目标','状态','次数','转发时间','最近错误','操作'],deliveriesPageItems.map(d=>`<tr><td>${d.id}</td><td>#${d.message_id}<div class="muted">${esc(eventTypeLabels[d.event_type]||d.event_type)} / ${esc(d.sender||'未知')}</div></td><td>${esc(d.device_label)}</td><td class="mono"><b>${esc(d.device_phone||'未录入')}</b></td><td>${esc(d.destination_name)}${d.forward_recipient?`<div class="mono small">→ ${esc(d.forward_recipient)}</div>`:''}</td><td>${pill(d.status)}${d.outbound_status?`<div class="muted small">${esc(outboundStatusLabels[d.outbound_status]||d.outbound_status)}</div>`:''}</td><td>${d.attempts}</td><td>${fmt(d.delivered_at||d.forward_sent_at)}</td><td class="body-cell">${esc(d.last_error||'—')}</td><td>${d.status==='delivered'?'':`<button class="btn small" onclick="retryDelivery(${d.id})">重试</button>`}</td></tr>`));
+      $('deliveriesPageInfo').textContent=filteredDeliveries.length?`第 ${deliveriesPage} / ${pageCount} 页，当前载入 ${filteredDeliveries.length} 条`:'没有匹配的记录';$('deliveriesPrev').disabled=deliveriesPage<=1;$('deliveriesNext').disabled=deliveriesPage>=pageCount;
       $('smsTemplatesTable').innerHTML=table(['模板','内容','状态','更新时间','操作'],(state.sms_templates||[]).map(t=>`<tr><td><b>${esc(t.name)}</b></td><td class="mono body-cell">${esc(t.body)}</td><td>${t.is_default?pill('默认','online'):'普通模板'}</td><td>${fmt(t.updated_at)}</td><td><button class="btn small" onclick="editSmsTemplate(${t.id})">编辑</button> ${t.is_default?'':`<button class="btn small" onclick="setDefaultSmsTemplate(${t.id})">设为默认</button> <button class="btn danger small" onclick="deleteSmsTemplate(${t.id})">删除</button>`}</td></tr>`));
+      $('callTemplatesTable').innerHTML=table(['模板','内容','状态','更新时间','操作'],(state.call_templates||[]).map(t=>`<tr><td><b>${esc(t.name)}</b></td><td class="mono body-cell">${esc(t.body)}</td><td>${t.is_default?pill('默认','online'):'普通模板'}</td><td>${fmt(t.updated_at)}</td><td><button class="btn small" onclick="editCallTemplate(${t.id})">编辑</button> ${t.is_default?'':`<button class="btn small" onclick="setDefaultCallTemplate(${t.id})">设为默认</button> <button class="btn danger small" onclick="deleteCallTemplate(${t.id})">删除</button>`}</td></tr>`));
       $('mcpTokensTable').innerHTML=table(['名称','Token 全文','权限','状态','创建时间','最后使用','过期时间','操作'],(state.mcp_tokens||[]).map(t=>`<tr><td><b>${esc(t.name)}</b></td><td class="mono body-cell">${t.token?`${esc(t.token)} <button class="btn small" onclick="copyMcpStoredToken(${t.id})">复制</button>`:'<span class="muted">历史 Token 无法恢复，请重新创建</span>'}</td><td class="mono">${esc(t.scopes)}</td><td>${pill(mcpTokenStatusLabels[t.status]||t.status,t.status==='active'?'online':'offline')}</td><td>${fmt(t.created_at)}</td><td>${fmt(t.last_used_at)}</td><td>${fmt(t.expires_at)}</td><td>${t.status==='active'?`<button class="btn small" onclick="revokeMcpToken(${t.id})">撤销</button> `:''}<button class="btn danger small" onclick="deleteMcpToken(${t.id})">删除</button></td></tr>`));
       const outboundDeviceValue=$('outboundDevice').value;
       $('outboundDevice').innerHTML=state.devices.map(d=>`<option value="${esc(d.id)}">${esc(d.phone_number||'未录入手机号')} / ${esc(d.name||d.id)} / ${d.online?'在线':'离线'}</option>`).join('');
@@ -369,10 +414,14 @@
       const defaultTemplate=(state.sms_templates||[]).find(item=>item.is_default);
       $('destinationTemplate').innerHTML=`<option value="">使用默认模板${defaultTemplate?`（${esc(defaultTemplate.name)}）`:''}</option>`+(state.sms_templates||[]).map(template=>`<option value="${template.id}">${esc(template.name)}${template.is_default?'（当前默认）':''}</option>`).join('');
       if([...$('destinationTemplate').options].some(option=>option.value===destinationTemplateValue))$('destinationTemplate').value=destinationTemplateValue;
+      const callTemplateValue=$('destinationCallTemplate').value;const defaultCallTemplate=(state.call_templates||[]).find(item=>item.is_default);
+      $('destinationCallTemplate').innerHTML=`<option value="">使用默认模板${defaultCallTemplate?`（${esc(defaultCallTemplate.name)}）`:''}</option>`+(state.call_templates||[]).map(template=>`<option value="${template.id}">${esc(template.name)}${template.is_default?'（当前默认）':''}</option>`).join('');
+      if([...$('destinationCallTemplate').options].some(option=>option.value===callTemplateValue))$('destinationCallTemplate').value=callTemplateValue;
       refillMultiSelect($('channelGroupDevices'),state.devices.map(device=>({value:device.id,label:`${device.phone_number||'未录入手机号'} / ${device.name||device.id}`})));
       refillMultiSelect($('channelGroupDestinations'),state.destinations.map(destination=>({value:String(destination.id),label:`${destination.name} / ${destinationKindLabels[destination.kind]||destination.kind}`})));
       if(!$('smsTemplateId').value&&!$('smsTemplateBody').value&&defaultTemplate){$('smsTemplateBody').value=defaultTemplate.body;updateSmsTemplatePreview()}
-      if(!$('callTemplateBody').dataset.dirty){$('callTemplateBody').value=state.call_template||'';updateCallTemplatePreview()}
+      if(supportsCallTemplates()){if(!$('callTemplateId').value&&!$('callTemplateBody').value&&defaultCallTemplate){$('callTemplateBody').value=defaultCallTemplate.body;updateCallTemplatePreview()}}
+      else if(!$('callTemplateBody').dataset.dirty){$('callTemplateBody').value=state.call_template||'';updateCallTemplatePreview()}
       applyTableLabels();
     }
     async function refresh(){
@@ -395,16 +444,24 @@
       refresh().catch(()=>toast('开关已保存，数据刷新失败，请稍后刷新核对'));
     };
     $('devicesTable').addEventListener('click',event=>{const button=event.target.closest('.forward-toggle');if(button)window.toggleDeviceForward(button.dataset.deviceId,button.dataset.field)});
-    function updateCallTemplatePreview(){const values={ori:'13800138000',receiver:'接收卡',phone:'当前设备号码',time:'2026-09-06 12:00:00',device:'示例设备',sms:'未接来电'};$('callTemplatePreview').textContent=$('callTemplateBody').value.replace(/\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}/g,(match,key)=>values[key]??match)}
+    function updateCallTemplatePreview(){const values={ori:'13800138000',receiver:'接收卡',phone:'当前设备号码',time:'2026-09-06 12:00:00',device:'示例设备',sms:'未接来电'};const body=$('callTemplateBody').value;$('callTemplatePreview').textContent=body.replace(/\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}/g,(match,key)=>values[key]??match);$('callTemplateCount').textContent=`${body.length} 字`}
     $('callTemplateBody').oninput=()=>{$('callTemplateBody').dataset.dirty='1';updateCallTemplatePreview()};
-    $('callTemplateForm').onsubmit=async e=>{e.preventDefault();try{await api('admin/call-template',{method:'PUT',body:JSON.stringify({body:$('callTemplateBody').value})});delete $('callTemplateBody').dataset.dirty;toast('电话转发模板已保存');await refresh()}catch(err){toast(err.message)}};
+    $('callTemplateForm').onsubmit=async e=>{e.preventDefault();try{if(supportsCallTemplates()){await api('admin/call-templates',{method:'POST',body:JSON.stringify({id:$('callTemplateId').value||null,name:$('callTemplateName').value.trim(),body:$('callTemplateBody').value,is_default:$('callTemplateDefault').value==='true'})});resetCallTemplateForm()}else{await api('admin/call-template',{method:'PUT',body:JSON.stringify({body:$('callTemplateBody').value})});delete $('callTemplateBody').dataset.dirty}toast('来电通知模板已保存');await refresh()}catch(err){toast(err.message)}};
+    function resetCallTemplateForm(){$('callTemplateForm').reset();$('callTemplateId').value='';delete $('callTemplateBody').dataset.dirty;const fallback=(state?.call_templates||[]).find(item=>item.is_default);$('callTemplateBody').value=supportsCallTemplates()?fallback?.body||'':state?.call_template||'';$('callTemplateDefault').value='false';updateCallTemplatePreview()}
+    window.editCallTemplate=id=>{if(!supportsCallTemplates())return;const item=state.call_templates.find(template=>template.id===id);if(!item)return;$('callTemplateId').value=item.id;$('callTemplateName').value=item.name;$('callTemplateBody').value=item.body;$('callTemplateDefault').value=String(item.is_default);updateCallTemplatePreview();$('callTemplateForm').scrollIntoView({behavior:'smooth',block:'start'})};
+    window.setDefaultCallTemplate=async id=>{if(!supportsCallTemplates())return;try{await api(`admin/call-templates/${id}/default`,{method:'POST',body:'{}'});toast('默认来电模板已更新');await refresh()}catch(err){toast(err.message)}};
+    window.deleteCallTemplate=async id=>{if(!supportsCallTemplates()||!confirm('确认删除这个来电通知模板？'))return;try{await api(`admin/call-templates/${id}`,{method:'DELETE'});if($('callTemplateId').value===String(id))resetCallTemplateForm();toast('来电通知模板已删除');await refresh()}catch(err){toast(err.message)}};
+    $('callTemplateCancel').onclick=resetCallTemplateForm;
+    document.querySelectorAll('[data-call-template-placeholder]').forEach(button=>button.onclick=()=>{const area=$('callTemplateBody');area.setRangeText(button.dataset.callTemplatePlaceholder,area.selectionStart,area.selectionEnd,'end');area.focus();area.dataset.dirty='1';updateCallTemplatePreview()});
     window.editDevice=async id=>{const d=state.devices.find(x=>x.id===id);const name=prompt('设备名称',d.name||'');if(name===null)return;const phone=prompt('SIM 手机号',d.phone_number||'');if(phone===null)return;await api(`admin/devices/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify({name,phone_number:phone})});toast('设备已更新');refresh()}
-    window.editDestination=id=>{const d=state.destinations.find(x=>x.id===id);const config={...d.config};$('destinationId').value=d.id;$('destinationName').value=d.name;$('destinationKind').value=d.kind;$('destinationEnabled').value=String(d.enabled);$('destinationTemplate').value=config.template_id?String(config.template_id):'';delete config.template_id;updateDestinationConfigHint();$('destinationConfig').value=JSON.stringify(config,null,2);window.scrollTo({top:0,behavior:'smooth'})}
+    window.editDestination=id=>{const d=state.destinations.find(x=>x.id===id);const config={...d.config};$('destinationId').value=d.id;$('destinationName').value=d.name;$('destinationKind').value=d.kind;$('destinationEnabled').value=String(d.enabled);$('destinationTemplate').value=config.template_id?String(config.template_id):'';delete config.template_id;if(supportsCallTemplates()){$('destinationCallTemplate').value=config.call_template_id?String(config.call_template_id):'';delete config.call_template_id}updateDestinationConfigHint();$('destinationConfig').value=JSON.stringify(config,null,2);$('destinationForm').scrollIntoView({behavior:'smooth',block:'start'})}
     window.deleteDestination=async id=>{if(!confirm('删除目标及其所有路由和转发记录？'))return;await api(`admin/destinations/${id}`,{method:'DELETE'});toast('目标已删除');refresh()}
     function resetChannelGroupForm(){$('channelGroupForm').reset();$('channelGroupId').value='';[...$('channelGroupDevices').options,...$('channelGroupDestinations').options].forEach(option=>option.selected=false)}
-    window.editChannelGroup=id=>{const group=(state.channel_groups||[]).find(item=>item.id===id);if(!group)return;$('channelGroupId').value=group.id;$('channelGroupName').value=group.name;$('channelGroupDescription').value=group.description||'';$('channelGroupEnabled').value=String(group.enabled);const deviceIds=new Set(group.device_ids);const destinationIds=new Set(group.destination_ids.map(String));[...$('channelGroupDevices').options].forEach(option=>option.selected=deviceIds.has(option.value));[...$('channelGroupDestinations').options].forEach(option=>option.selected=destinationIds.has(option.value));$('channelGroupForm').scrollIntoView({behavior:'smooth',block:'start'})}
+    window.editChannelGroup=id=>{const group=(state.channel_groups||[]).find(item=>item.id===id);if(!group)return;$('channelGroupId').value=group.id;$('channelGroupName').value=group.name;$('channelGroupDescription').value=group.description||'';$('channelGroupEnabled').value=String(group.enabled);$('channelGroupEventType').value=group.event_type||'both';const deviceIds=new Set(group.device_ids);const destinationIds=new Set(group.destination_ids.map(String));[...$('channelGroupDevices').options].forEach(option=>option.selected=deviceIds.has(option.value));[...$('channelGroupDestinations').options].forEach(option=>option.selected=destinationIds.has(option.value));$('channelGroupForm').scrollIntoView({behavior:'smooth',block:'start'})}
     window.deleteChannelGroup=async id=>{if(!confirm('删除这个通道组？已有短信和转发记录会保留。'))return;await api(`admin/channel-groups/${id}`,{method:'DELETE'});toast('通道组已删除');resetChannelGroupForm();refresh()}
     window.retryDelivery=async id=>{await api(`admin/deliveries/${id}/retry`,{method:'POST',body:'{}'});toast('已加入重试队列');refresh()}
+    $('deliveriesSearch').addEventListener('input',()=>{deliveriesPage=1;if(state)render()});
+    $('deliveriesPrev').onclick=()=>{deliveriesPage-=1;if(state)render()};$('deliveriesNext').onclick=()=>{deliveriesPage+=1;if(state)render()};
     window.retryOutbound=async id=>{if(!confirm('确认将这条短信重新加入发送队列？收件人可能收到重复短信。'))return;await api(`admin/outbound-sms/${id}/retry`,{method:'POST',body:'{}'});toast('短信已重新入队');refresh()}
     window.deleteOutbound=async id=>{if(!confirm('确认删除这条待发送短信？删除后无法恢复。'))return;await api(`admin/outbound-sms/${id}`,{method:'DELETE'});toast('待发送短信已删除');refresh()}
     function resetSmsTemplateForm(){$('smsTemplateForm').reset();$('smsTemplateId').value='';const fallback=(state?.sms_templates||[]).find(item=>item.is_default);$('smsTemplateBody').value=fallback?.body||'';$('smsTemplateDefault').value='false';updateSmsTemplatePreview()}
@@ -435,6 +492,7 @@
     };
     function setMenuOpen(open){$('sidebar').classList.toggle('menu-open',open);$('menuBtn').setAttribute('aria-expanded',String(open));$('menuLabel').textContent=open?'收起':'导航'}
     function activatePage(page){
+      page=({'sms-routing':'routing','call-routing':'routing',destinations:'routing','call-templates':'templates'})[page]||page;
       const tabs=[...document.querySelectorAll('.tab')];const button=tabs.find(item=>item.dataset.page===page)||tabs[0];const current=button.dataset.page;
       tabs.forEach(item=>{item.classList.toggle('active',item===button);if(item===button)item.setAttribute('aria-current','page');else item.removeAttribute('aria-current')});
       document.querySelectorAll('.page').forEach(item=>item.classList.toggle('active',item.id===`page-${current}`));
@@ -445,15 +503,15 @@
     $('skipContent').onclick=event=>{event.preventDefault();$('mainContent').focus()};
     document.querySelectorAll('.tab').forEach(btn=>btn.onclick=event=>{if(event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;event.preventDefault();location.hash=btn.dataset.page;activatePage(btn.dataset.page);if(window.matchMedia('(max-width:900px)').matches){$('mainContent').focus({preventScroll:true});$('mainContent').scrollIntoView({block:'start'})}});
     window.addEventListener('hashchange',()=>activatePage(location.hash.slice(1)));
-    function updateDestinationConfigHint(){const kind=$('destinationKind').value;$('destinationTemplateField').classList.toggle('hidden',!templatedDestinationKinds.has(kind));const hints={feishu_app:'短信通知使用所选消息模板；群回复转 SMS 默认每 10 秒读取一次群历史消息。可选加速：订阅 im.message.receive_v1，请求地址为 '+new URL('api/integrations/feishu/events',location.href).href+'，并把 Verification Token 填入 verification_token；Encrypt Key 保持未启用。',feishu_webhook:'短信通知使用所选消息模板。',sms_forward:'recipient 是接收短信的号码；sender_device_id 留空时使用收到原短信的板子，填写设备 ID 时改由指定板子发送。目标号码不能是已登记的板载 SIM。'};$('destinationConfigHint').textContent=hints[kind]||''}
-    $('destinationKind').onchange=()=>{const examples={feishu_app:{app_id:'cli_xxx',app_secret:'xxx',receive_id:'oc_xxx',receive_id_type:'chat_id',verification_token:'飞书事件订阅 Verification Token'},feishu_webhook:{url:'https://open.feishu.cn/open-apis/bot/v2/hook/xxx'},wecom_webhook:{url:'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx'},sms_forward:{recipient:'13800138000',sender_device_id:''},webhook:{url:'https://example.com/webhook',headers:{Authorization:'Bearer xxx'}}};$('destinationConfig').value=JSON.stringify(examples[$('destinationKind').value],null,2);$('destinationTemplate').value='';updateDestinationConfigHint()};
+    function updateDestinationConfigHint(){const kind=$('destinationKind').value;$('destinationTemplateField').classList.toggle('hidden',!templatedDestinationKinds.has(kind));$('destinationCallTemplateField').classList.toggle('hidden',!supportsCallTemplates()||!callTemplatedDestinationKinds.has(kind));const hints={feishu_app:'短信通知使用所选消息模板；群回复转 SMS 默认每 10 秒读取一次群历史消息。可选加速：订阅 im.message.receive_v1，请求地址为 '+new URL('api/integrations/feishu/events',location.href).href+'，并把 Verification Token 填入 verification_token；Encrypt Key 保持未启用。',feishu_webhook:'短信通知使用所选消息模板。',sms_forward:'recipient 是接收短信的号码；sender_device_id 留空时使用收到原短信的板子，填写设备 ID 时改由指定板子发送。目标号码不能是已登记的板载 SIM。'};$('destinationConfigHint').textContent=hints[kind]||''}
+    $('destinationKind').onchange=()=>{const examples={feishu_app:{app_id:'cli_xxx',app_secret:'xxx',receive_id:'oc_xxx',receive_id_type:'chat_id',verification_token:'飞书事件订阅 Verification Token'},feishu_webhook:{url:'https://open.feishu.cn/open-apis/bot/v2/hook/xxx'},wecom_webhook:{url:'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx'},sms_forward:{recipient:'13800138000',sender_device_id:''},webhook:{url:'https://example.com/webhook',headers:{Authorization:'Bearer xxx'}}};$('destinationConfig').value=JSON.stringify(examples[$('destinationKind').value],null,2);$('destinationTemplate').value='';$('destinationCallTemplate').value='';updateDestinationConfigHint()};
     $('destinationKind').onchange();
-    $('destinationForm').addEventListener('submit',async e=>{e.preventDefault();try{const config=JSON.parse($('destinationConfig').value);if(templatedDestinationKinds.has($('destinationKind').value)&&$('destinationTemplate').value)config.template_id=Number($('destinationTemplate').value);const body={id:$('destinationId').value||null,name:$('destinationName').value,kind:$('destinationKind').value,enabled:$('destinationEnabled').value==='true',config};await api('admin/destinations',{method:'POST',body:JSON.stringify(body)});e.target.reset();$('destinationId').value='';$('destinationKind').onchange();toast('转发目标已保存');refresh()}catch(err){toast(err.message)}});
+    $('destinationForm').addEventListener('submit',async e=>{e.preventDefault();try{const config=JSON.parse($('destinationConfig').value);const kind=$('destinationKind').value;if(templatedDestinationKinds.has(kind)&&$('destinationTemplate').value)config.template_id=Number($('destinationTemplate').value);if(supportsCallTemplates()&&callTemplatedDestinationKinds.has(kind)){delete config.call_template_id;if($('destinationCallTemplate').value)config.call_template_id=Number($('destinationCallTemplate').value)}const body={id:$('destinationId').value||null,name:$('destinationName').value,kind,enabled:$('destinationEnabled').value==='true',config};await api('admin/destinations',{method:'POST',body:JSON.stringify(body)});e.target.reset();$('destinationId').value='';$('destinationKind').onchange();toast('转发目标已保存');refresh()}catch(err){toast(err.message)}});
     $('smsTemplateForm').addEventListener('submit',async e=>{e.preventDefault();try{await api('admin/sms-templates',{method:'POST',body:JSON.stringify({id:$('smsTemplateId').value||null,name:$('smsTemplateName').value.trim(),body:$('smsTemplateBody').value,is_default:$('smsTemplateDefault').value==='true'})});toast('短信模板已保存');resetSmsTemplateForm();refresh()}catch(err){toast(err.message)}})
     $('smsTemplateCancel').onclick=resetSmsTemplateForm;
     $('smsTemplateBody').addEventListener('input',updateSmsTemplatePreview);
     document.querySelectorAll('[data-template-placeholder]').forEach(button=>button.onclick=()=>{const area=$('smsTemplateBody');area.setRangeText(button.dataset.templatePlaceholder,area.selectionStart,area.selectionEnd,'end');area.focus();updateSmsTemplatePreview()});
-    $('channelGroupForm').addEventListener('submit',async e=>{e.preventDefault();try{const body={id:$('channelGroupId').value||null,name:$('channelGroupName').value,description:$('channelGroupDescription').value,enabled:$('channelGroupEnabled').value==='true',device_ids:[...$('channelGroupDevices').selectedOptions].map(option=>option.value),destination_ids:[...$('channelGroupDestinations').selectedOptions].map(option=>Number(option.value))};await api('admin/channel-groups',{method:'POST',body:JSON.stringify(body)});resetChannelGroupForm();toast('通道组已保存');refresh()}catch(err){toast(err.message)}});
+    $('channelGroupForm').addEventListener('submit',async e=>{e.preventDefault();try{const body={id:$('channelGroupId').value||null,name:$('channelGroupName').value,description:$('channelGroupDescription').value,enabled:$('channelGroupEnabled').value==='true',device_ids:[...$('channelGroupDevices').selectedOptions].map(option=>option.value),destination_ids:[...$('channelGroupDestinations').selectedOptions].map(option=>Number(option.value))};if(supportsCallTemplates())body.event_type=$('channelGroupEventType').value;await api('admin/channel-groups',{method:'POST',body:JSON.stringify(body)});resetChannelGroupForm();toast('通道组已保存');refresh()}catch(err){toast(err.message)}});
     $('channelGroupCancel').onclick=resetChannelGroupForm;
     $('mcpTokenForm').addEventListener('submit',async e=>{e.preventDefault();try{const expiry=$('mcpTokenExpiry').value;const result=await api('admin/mcp-tokens',{method:'POST',body:JSON.stringify({name:$('mcpTokenName').value.trim(),expires_in_days:expiry===''?null:Number(expiry)})});$('mcpRawToken').value=result.token;$('mcpTokenResult').classList.remove('hidden');e.target.reset();$('mcpTokenExpiry').value='90';toast('MCP Token 已创建（read,send）');refresh()}catch(err){toast(err.message)}});
     $('copyMcpEndpoint').onclick=()=>copyText($('mcpEndpoint').value);
