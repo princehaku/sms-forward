@@ -34,6 +34,8 @@ DEVICE_SYNC_SECONDS = max(60, int(os.getenv("DEVICE_SYNC_SECONDS", "120")))
 MAX_SMS_LENGTH = 12000
 MAX_OUTBOUND_SMS_LENGTH = 1000
 MAX_SMS_TEMPLATE_LENGTH = 4000
+MAX_CHANNEL_KEYWORDS = 50
+MAX_CHANNEL_KEYWORD_LENGTH = 100
 OUTBOUND_STALE_SECONDS = max(
     300, int(os.getenv("OUTBOUND_STALE_SECONDS", "900"))
 )
@@ -134,7 +136,9 @@ def init_db():
                 body TEXT NOT NULL,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
                 received_at TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'stored'
+                status TEXT NOT NULL DEFAULT 'stored',
+                keyword_status TEXT NOT NULL DEFAULT 'legacy',
+                keyword_matches_json TEXT NOT NULL DEFAULT '[]'
             );
 
             CREATE TABLE IF NOT EXISTS destinations (
@@ -160,6 +164,7 @@ def init_db():
                 name TEXT NOT NULL UNIQUE,
                 description TEXT NOT NULL DEFAULT '',
                 enabled INTEGER NOT NULL DEFAULT 1,
+                keywords_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -190,6 +195,9 @@ def init_db():
                 response_excerpt TEXT NOT NULL DEFAULT '',
                 feishu_message_id TEXT,
                 feishu_chat_id TEXT,
+                keyword_status TEXT NOT NULL DEFAULT 'legacy',
+                keyword_matches_json TEXT NOT NULL DEFAULT '[]',
+                direct_route INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(message_id, destination_id)
             );
 
@@ -399,6 +407,20 @@ def init_db():
         message_columns = {
             row["name"] for row in db.execute("PRAGMA table_info(messages)")
         }
+        for field, definition in (
+            ("keyword_status", "TEXT NOT NULL DEFAULT 'legacy'"),
+            ("keyword_matches_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ):
+            if field not in message_columns:
+                db.execute(f"ALTER TABLE messages ADD COLUMN {field} {definition}")
+        group_columns = {
+            row["name"] for row in db.execute("PRAGMA table_info(channel_groups)")
+        }
+        if "keywords_json" not in group_columns:
+            db.execute(
+                "ALTER TABLE channel_groups ADD COLUMN keywords_json "
+                "TEXT NOT NULL DEFAULT '[]'"
+            )
         if "event_type" not in message_columns:
             db.execute(
                 """
@@ -422,6 +444,13 @@ def init_db():
         delivery_columns = {
             row["name"] for row in db.execute("PRAGMA table_info(deliveries)")
         }
+        for field, definition in (
+            ("keyword_status", "TEXT NOT NULL DEFAULT 'legacy'"),
+            ("keyword_matches_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("direct_route", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if field not in delivery_columns:
+                db.execute(f"ALTER TABLE deliveries ADD COLUMN {field} {definition}")
         if "feishu_message_id" not in delivery_columns:
             db.execute("ALTER TABLE deliveries ADD COLUMN feishu_message_id TEXT")
         if "feishu_chat_id" not in delivery_columns:
@@ -1524,50 +1553,118 @@ def upsert_device(db, data, remote_ip=None):
     return device_id, now
 
 
+def keyword_match_status(event_type, matches, direct_route=False):
+    if event_type != "sms":
+        return "not_applicable"
+    statuses = {item["status"] for item in matches}
+    if "matched" in statuses:
+        return "matched"
+    if direct_route or "unrestricted" in statuses:
+        return "unrestricted"
+    return "unmatched" if matches else "no_route"
+
+
+def decode_keyword_record(item):
+    item["keyword_matches"] = json.loads(item.pop("keyword_matches_json") or "[]")
+    if "direct_route" in item:
+        item["direct_route"] = bool(item["direct_route"])
+    return item
+
+
 def queue_deliveries(db, message_id, device_id):
-    event = db.execute("SELECT event_type FROM messages WHERE id=?", (message_id,)).fetchone()
-    device = db.execute("SELECT sms_forward_enabled, call_forward_enabled FROM devices WHERE id=?", (device_id,)).fetchone()
-    field = "call_forward_enabled" if event and event["event_type"] == "missed_call" else "sms_forward_enabled"
-    if device and not device[field]:
-        db.execute("UPDATE messages SET status='stored' WHERE id=?", (message_id,))
+    event = db.execute(
+        "SELECT event_type, body FROM messages WHERE id=?", (message_id,)
+    ).fetchone()
+    if not event:
         return 0
-    rows = db.execute(
-        """
-        SELECT DISTINCT d.id
-        FROM destinations d
-        WHERE d.enabled=1 AND (
-            EXISTS (
-                SELECT 1
-                FROM routes r
-                WHERE r.destination_id=d.id
-                  AND r.enabled=1
-                  AND r.device_id IN ('*', ?)
-            )
-            OR EXISTS (
-                SELECT 1
-                FROM channel_group_destinations cgd
-                JOIN channel_groups cg ON cg.id=cgd.group_id
-                JOIN channel_group_devices cgdev ON cgdev.group_id=cg.id
-                WHERE cgd.destination_id=d.id
-                  AND cg.enabled=1
-                  AND cgdev.device_id=?
-            )
+    device = db.execute("SELECT sms_forward_enabled, call_forward_enabled FROM devices WHERE id=?", (device_id,)).fetchone()
+    field = "call_forward_enabled" if event["event_type"] == "missed_call" else "sms_forward_enabled"
+    if device and not device[field]:
+        db.execute(
+            "UPDATE messages SET status='stored', keyword_status='disabled' WHERE id=?",
+            (message_id,),
         )
+        return 0
+    direct_destinations = {
+        row["id"] for row in db.execute(
+            """
+            SELECT DISTINCT d.id
+            FROM destinations d JOIN routes r ON r.destination_id=d.id
+            WHERE d.enabled=1 AND r.enabled=1 AND r.device_id IN ('*', ?)
+            ORDER BY d.id
+            """,
+            (device_id,),
+        ).fetchall()
+    }
+    group_rows = db.execute(
+        """
+        SELECT cg.id group_id, cg.name group_name, cg.keywords_json,
+               d.id destination_id
+        FROM channel_groups cg
+        JOIN channel_group_devices cgdev ON cgdev.group_id=cg.id
+        JOIN channel_group_destinations cgd ON cgd.group_id=cg.id
+        JOIN destinations d ON d.id=cgd.destination_id
+        WHERE cg.enabled=1 AND cgdev.device_id=? AND d.enabled=1
+        ORDER BY cg.id, d.id
         """,
-        (device_id, device_id),
+        (device_id,),
     ).fetchall()
-    for row in rows:
+    group_matches = {}
+    destination_matches = {destination_id: [] for destination_id in direct_destinations}
+    folded_body = event["body"].casefold()
+    for row in group_rows:
+        if row["group_id"] not in group_matches:
+            keywords = json.loads(row["keywords_json"] or "[]")
+            matched = (
+                [keyword for keyword in keywords if keyword.casefold() in folded_body]
+                if event["event_type"] == "sms" else []
+            )
+            match = {
+                "group_id": row["group_id"],
+                "group_name": row["group_name"],
+                "keywords": keywords,
+                "matched_keywords": matched,
+                "status": (
+                    "not_applicable" if event["event_type"] != "sms" else
+                    "unrestricted" if not keywords else
+                    "matched" if matched else "unmatched"
+                ),
+            }
+            group_matches[row["group_id"]] = match
+        destination_matches.setdefault(row["destination_id"], []).append(
+            group_matches[row["group_id"]]
+        )
+    delivery_count = 0
+    for destination_id, matches in sorted(destination_matches.items()):
+        direct_route = destination_id in direct_destinations
+        keyword_status = keyword_match_status(event["event_type"], matches, direct_route)
+        allowed = direct_route or any(item["status"] != "unmatched" for item in matches)
+        delivery_count += int(allowed)
         db.execute(
             """
             INSERT OR IGNORE INTO deliveries
-                (message_id, destination_id, status, attempts, next_attempt_at)
-            VALUES (?, ?, 'pending', 0, 0)
+                (message_id, destination_id, status, attempts, next_attempt_at,
+                 keyword_status, keyword_matches_json, direct_route)
+            VALUES (?, ?, ?, 0, 0, ?, ?, ?)
             """,
-            (message_id, row["id"]),
+            (
+                message_id, destination_id, "pending" if allowed else "filtered",
+                keyword_status, json.dumps(matches, ensure_ascii=False), int(direct_route),
+            ),
         )
-    status = "queued" if rows else "stored"
-    db.execute("UPDATE messages SET status=? WHERE id=?", (status, message_id))
-    return len(rows)
+    matches = list(group_matches.values())
+    status = "queued" if delivery_count else "filtered" if destination_matches else "stored"
+    db.execute(
+        """
+        UPDATE messages SET status=?, keyword_status=?, keyword_matches_json=?
+        WHERE id=?
+        """,
+        (
+            status, keyword_match_status(event["event_type"], matches, bool(direct_destinations)),
+            json.dumps(matches, ensure_ascii=False), message_id,
+        ),
+    )
+    return delivery_count
 
 
 def queue_web_push_deliveries(db, message_id, event_type):
@@ -2260,6 +2357,7 @@ def admin_snapshot():
             """
         ).fetchall()]
         for item in events:
+            decode_keyword_record(item)
             try:
                 item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
             except (TypeError, ValueError):
@@ -2301,6 +2399,7 @@ def admin_snapshot():
             )
         for item in channel_groups:
             item["enabled"] = bool(item["enabled"])
+            item["keywords"] = json.loads(item.pop("keywords_json") or "[]")
             item["device_ids"] = devices_by_group.get(item["id"], [])
             item["destination_ids"] = destinations_by_group.get(item["id"], [])
         deliveries = [dict(row) for row in db.execute(
@@ -2327,6 +2426,8 @@ def admin_snapshot():
             ORDER BY dl.id DESC LIMIT 400
             """
         ).fetchall()]
+        for item in deliveries:
+            decode_keyword_record(item)
         outbound_sms = [dict(row) for row in db.execute(
             """
             SELECT
@@ -2385,6 +2486,7 @@ def admin_snapshot():
             "destinations": destinations,
             "routes": routes,
             "channel_groups": channel_groups,
+            "supports_keyword_matching": True,
             "deliveries": deliveries,
             "outbound_sms": outbound_sms,
             "sms_templates": sms_templates,
@@ -2974,6 +3076,31 @@ def require_existing_values(db, table, column, values, label):
         raise ValueError(f"unknown {label}: {', '.join(missing)}")
 
 
+def normalize_channel_keywords(values):
+    if not isinstance(values, list):
+        raise ValueError("keywords must be an array of strings")
+    result = []
+    seen = set()
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError("keywords must be an array of strings")
+        keyword = value.strip()
+        if not keyword:
+            continue
+        if "\r" in keyword or "\n" in keyword:
+            raise ValueError("each keyword must be a single line")
+        if len(keyword) > MAX_CHANNEL_KEYWORD_LENGTH:
+            raise ValueError(f"each keyword must be at most {MAX_CHANNEL_KEYWORD_LENGTH} characters")
+        folded = keyword.casefold()
+        if folded in seen:
+            continue
+        seen.add(folded)
+        result.append(keyword)
+        if len(result) > MAX_CHANNEL_KEYWORDS:
+            raise ValueError(f"at most {MAX_CHANNEL_KEYWORDS} keywords are allowed")
+    return result
+
+
 @app.post("/api/admin/channel-groups")
 def save_channel_group():
     denied = require_admin()
@@ -2992,6 +3119,10 @@ def save_channel_group():
         )
         device_ids = [value for value in device_ids if value]
         destination_ids = unique_values(data.get("destination_ids"), int)
+        keywords_json = (
+            json.dumps(normalize_channel_keywords(data["keywords"]), ensure_ascii=False)
+            if "keywords" in data else None
+        )
         now = utc_now()
         with db_connect() as db:
             require_existing_values(db, "devices", "id", device_ids, "device")
@@ -3006,7 +3137,8 @@ def save_channel_group():
                 cursor = db.execute(
                     """
                     UPDATE channel_groups
-                    SET name=?, description=?, enabled=?, updated_at=?
+                    SET name=?, description=?, enabled=?, updated_at=?,
+                        keywords_json=COALESCE(?, keywords_json)
                     WHERE id=?
                     """,
                     (
@@ -3014,6 +3146,7 @@ def save_channel_group():
                         description,
                         1 if data.get("enabled", True) else 0,
                         now,
+                        keywords_json,
                         group_id,
                     ),
                 )
@@ -3025,8 +3158,8 @@ def save_channel_group():
                 cursor = db.execute(
                     """
                     INSERT INTO channel_groups
-                        (name, description, enabled, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
+                        (name, description, enabled, created_at, updated_at, keywords_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         name,
@@ -3034,6 +3167,7 @@ def save_channel_group():
                         1 if data.get("enabled", True) else 0,
                         now,
                         now,
+                        keywords_json if keywords_json is not None else "[]",
                     ),
                 )
                 group_id = cursor.lastrowid
@@ -3093,11 +3227,18 @@ def retry_delivery(delivery_id):
     if denied:
         return denied
     with db_connect() as db:
+        row = db.execute(
+            "SELECT status FROM deliveries WHERE id=?", (delivery_id,)
+        ).fetchone()
+        if row and row["status"] == "filtered":
+            return jsonify(
+                {"code": 409, "message": "关键词未命中的记录不能重试"}
+            ), 409
         cursor = db.execute(
             """
             UPDATE deliveries
             SET status='retry', next_attempt_at=0, last_error=''
-            WHERE id=?
+            WHERE id=? AND status<>'filtered'
             """,
             (delivery_id,),
         )
@@ -3599,7 +3740,9 @@ def refresh_message_status(db, message_id):
     statuses = {row["status"] for row in rows}
     if not statuses:
         status = "stored"
-    elif statuses == {"delivered"}:
+    elif statuses == {"filtered"}:
+        status = "filtered"
+    elif statuses - {"filtered"} == {"delivered"}:
         status = "delivered"
     elif "failed" in statuses and not statuses.intersection({"pending", "retry", "sending"}):
         status = "failed"
@@ -3763,7 +3906,7 @@ def process_delivery(delivery_id):
             """,
             (delivery_id,),
         ).fetchone()
-        if not row:
+        if not row or row["status"] == "filtered" or row["keyword_status"] == "unmatched":
             return
         formatted_message = None
         if not row["enabled"]:

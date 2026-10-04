@@ -266,7 +266,10 @@ def list_missed_calls(
 
 @mcp.tool(
     title="List forwarding records",
-    description="List inbound SMS and missed-call forwarding attempts and results.",
+    description=(
+        "List inbound SMS and missed-call forwarding attempts and results, "
+        "including the recorded channel-group keyword matches and filtered SMS."
+    ),
     annotations=READ_ONLY,
 )
 def list_forwarding_records(status: str = "", limit: int = 50) -> dict:
@@ -279,6 +282,7 @@ def list_forwarding_records(status: str = "", limit: int = 50) -> dict:
             f"""
             SELECT dl.id, dl.message_id, dl.status, dl.attempts,
                    dl.last_attempt_at, dl.delivered_at, dl.last_error,
+                   dl.keyword_status, dl.keyword_matches_json, dl.direct_route,
                    dl.http_status, dest.name destination_name,
                    dest.kind destination_kind, m.device_id, m.event_type,
                    dev.name device_name, dev.phone_number device_phone,
@@ -297,7 +301,15 @@ def list_forwarding_records(status: str = "", limit: int = 50) -> dict:
             """,
             params,
         ).fetchall()
-    return {"count": len(rows), "deliveries": [dict(row) for row in rows]}
+    deliveries = []
+    for row in rows:
+        item = dict(row)
+        item["keyword_matches"] = json.loads(
+            item.pop("keyword_matches_json") or "[]"
+        )
+        item["direct_route"] = bool(item["direct_route"])
+        deliveries.append(item)
+    return {"count": len(deliveries), "deliveries": deliveries}
 
 
 @mcp.tool(
@@ -369,7 +381,8 @@ def send_sms(
 @mcp.tool(
     title="Get routing summary",
     description=(
-        "Return destination metadata, channel groups, and legacy direct routes. "
+        "Return destination metadata, channel groups with SMS keyword filters, "
+        "and legacy direct routes. "
         "Webhook URLs, headers, and application secrets are never returned."
     ),
     annotations=READ_ONLY,
@@ -402,7 +415,8 @@ def get_routing_summary() -> dict:
             dict(row)
             for row in db.execute(
                 """
-                SELECT id, name, description, enabled, created_at, updated_at
+                SELECT id, name, description, enabled, keywords_json,
+                       created_at, updated_at
                 FROM channel_groups
                 ORDER BY id
                 """
@@ -428,6 +442,7 @@ def get_routing_summary() -> dict:
         ).fetchall()
     groups_by_id = {group["id"]: group for group in groups}
     for group in groups:
+        group["keywords"] = json.loads(group.pop("keywords_json") or "[]")
         group["devices"] = []
         group["destinations"] = []
     for row in group_devices:

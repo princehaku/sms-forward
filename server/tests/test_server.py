@@ -1162,6 +1162,33 @@ class SmsCenterTest(unittest.TestCase):
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE channel_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT NOT NULL DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO channel_groups (name, created_at, updated_at)
+            VALUES ('legacy channel', '2026-07-01', '2026-07-01')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO messages (message_key, device_id, body, received_at)
+            VALUES ('legacy-message', 'legacy-device', 'old body', '2026-07-01')
+            """
+        )
+        connection.execute(
+            "INSERT INTO deliveries (message_id, destination_id) VALUES (1, 1)"
+        )
         connection.commit()
         connection.close()
 
@@ -1189,6 +1216,19 @@ class SmsCenterTest(unittest.TestCase):
                     row["name"]
                     for row in db.execute("PRAGMA table_info(deliveries)")
                 }
+                group_columns = {
+                    row["name"]
+                    for row in db.execute("PRAGMA table_info(channel_groups)")
+                }
+                legacy_group = db.execute(
+                    "SELECT * FROM channel_groups WHERE name='legacy channel'"
+                ).fetchone()
+                legacy_delivery = db.execute(
+                    "SELECT * FROM deliveries WHERE id=1"
+                ).fetchone()
+                legacy_message = db.execute(
+                    "SELECT * FROM messages WHERE message_key='legacy-message'"
+                ).fetchone()
                 message_columns = {
                     row["name"]
                     for row in db.execute("PRAGMA table_info(messages)")
@@ -1207,6 +1247,18 @@ class SmsCenterTest(unittest.TestCase):
             self.assertEqual(migrated_mcp_scope, "read,send")
             self.assertIn("feishu_message_id", delivery_columns)
             self.assertIn("feishu_chat_id", delivery_columns)
+            self.assertIn("keywords_json", group_columns)
+            self.assertEqual(json.loads(legacy_group["keywords_json"]), [])
+            self.assertIn("keyword_status", delivery_columns)
+            self.assertIn("keyword_matches_json", delivery_columns)
+            self.assertIn("direct_route", delivery_columns)
+            self.assertEqual(legacy_delivery["keyword_status"], "legacy")
+            self.assertEqual(json.loads(legacy_delivery["keyword_matches_json"]), [])
+            self.assertEqual(legacy_delivery["direct_route"], 0)
+            self.assertIn("keyword_status", message_columns)
+            self.assertIn("keyword_matches_json", message_columns)
+            self.assertEqual(legacy_message["keyword_status"], "legacy")
+            self.assertEqual(json.loads(legacy_message["keyword_matches_json"]), [])
             self.assertIn("event_type", message_columns)
             self.assertIn("metadata_json", message_columns)
             self.assertIn("traffic_total_bytes", device_columns)
@@ -1866,6 +1918,318 @@ class SmsCenterTest(unittest.TestCase):
         payload = post.call_args.kwargs["json"]
         self.assertEqual(payload["msgtype"], "text")
         self.assertIn("企微转发测试", payload["text"]["content"])
+
+    def _keyword_fixture(self, name):
+        # Existing tests intentionally share legacy wildcard routes. A separate
+        # database makes keyword routing and delivery counts independent of them.
+        original_path = self.module.DATABASE_PATH
+        self.module.DATABASE_PATH = Path(self.temp_dir.name) / f"keyword-{name}.db"
+        self.addCleanup(setattr, self.module, "DATABASE_PATH", original_path)
+        self.module.init_db()
+        device_id = f"dev-keyword-{name}"
+        registered = self.client.post(
+            "/api/device/register",
+            json={"token": "sms-sb", "device_id": device_id},
+        )
+        self.assertEqual(registered.status_code, 200)
+        return {"X-SMS-Admin-Token": "admin-test"}, device_id
+
+    def _keyword_destination(self, headers, name, kind="webhook", enabled=True):
+        config = (
+            {"recipient": "13800138999"}
+            if kind == "sms_forward"
+            else {"url": "https://example.test/keyword"}
+        )
+        response = self.client.post(
+            "/api/admin/destinations",
+            headers=headers,
+            json={"name": name, "kind": kind, "config": config, "enabled": enabled},
+        )
+        self.assertEqual(response.status_code, 200)
+        return response.json["id"]
+
+    def _keyword_group(self, headers, device_id, destinations, name, keywords, **extra):
+        payload = {
+            "name": name,
+            "device_ids": [device_id],
+            "destination_ids": destinations,
+            "keywords": keywords,
+        }
+        payload.update(extra)
+        response = self.client.post(
+            "/api/admin/channel-groups", headers=headers, json=payload
+        )
+        self.assertEqual(response.status_code, 200, response.json)
+        return response.json["id"]
+
+    def _keyword_receive(self, device_id, key, body):
+        response = self.client.post(
+            "/api/messages",
+            json={
+                "token": "sms-sb",
+                "device_id": device_id,
+                "message_id": key,
+                "sender": "10086",
+                "body": body,
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.json)
+        return response.json
+
+    def _keyword_records(self, headers, message_id):
+        snapshot = self.client.get("/api/admin/snapshot", headers=headers).json
+        message = next(item for item in snapshot["messages"] if item["id"] == message_id)
+        deliveries = [
+            item for item in snapshot["deliveries"] if item["message_id"] == message_id
+        ]
+        return message, deliveries
+
+    def test_keyword_group_normalization_validation_and_update(self):
+        headers, device_id = self._keyword_fixture("validation")
+        destination = self._keyword_destination(headers, "keyword-validation")
+        group_id = self._keyword_group(
+            headers, device_id, [destination], "关键词配置", ["  验证码  ", "", "  ", "CODE", "code", "Straße", "STRASSE"]
+        )
+        snapshot = self.client.get("/api/admin/snapshot", headers=headers).json
+        self.assertTrue(snapshot["supports_keyword_matching"])
+        group = next(item for item in snapshot["channel_groups"] if item["id"] == group_id)
+        self.assertEqual(group["keywords"], ["验证码", "CODE", "Straße"])
+
+        update = {
+            "id": group_id,
+            "name": "关键词配置已修改",
+            "device_ids": [device_id],
+            "destination_ids": [destination],
+        }
+        self.assertEqual(self.client.post("/api/admin/channel-groups", headers=headers, json=update).status_code, 200)
+        snapshot = self.client.get("/api/admin/snapshot", headers=headers).json
+        self.assertEqual(snapshot["channel_groups"][0]["keywords"], ["验证码", "CODE", "Straße"])
+
+        invalid_values = (
+            None, "验证码", {"value": "验证码"}, True, [123], [None], [True],
+            ["payment\nsuccess"], ["payment\rsuccess"], ["x" * 101],
+            [f"keyword-{number}" for number in range(51)],
+        )
+        for value in invalid_values:
+            with self.subTest(keywords=value):
+                rejected = self.client.post(
+                    "/api/admin/channel-groups", headers=headers, json={**update, "keywords": value}
+                )
+                self.assertEqual(rejected.status_code, 400)
+                snapshot = self.client.get("/api/admin/snapshot", headers=headers).json
+                self.assertEqual(snapshot["channel_groups"][0]["keywords"], ["验证码", "CODE", "Straße"])
+        snapshot = self.client.get("/api/admin/snapshot", headers=headers).json
+        self.assertEqual(snapshot["channel_groups"][0]["keywords"], ["验证码", "CODE", "Straße"])
+
+        self.assertEqual(self.client.post("/api/admin/channel-groups", headers=headers, json={**update, "keywords": []}).status_code, 200)
+        self.assertEqual(self.client.get("/api/admin/snapshot", headers=headers).json["channel_groups"][0]["keywords"], [])
+        self.assertEqual(self.client.post("/api/admin/channel-groups", headers=headers, json={**update, "keywords": ["x" * 100]}).status_code, 200)
+
+    def test_keyword_matching_is_case_insensitive_literal_or(self):
+        headers, device_id = self._keyword_fixture("literal")
+        destination = self._keyword_destination(headers, "keyword-literal")
+        group_id = self._keyword_group(headers, device_id, [destination], "字面关键词", ["验证码", "CoDe", "a.b", "Straße"])
+        for key, body, matched_keywords in (
+            ("literal-code", "Your CODE is 1234", ["CoDe"]),
+            ("literal-chinese", "您的验证码是 1234", ["验证码"]),
+            ("literal-dot", "Please use a.b", ["a.b"]),
+            ("literal-unicode", "STRASSE", ["Straße"]),
+            ("literal-many", "验证码 CODE a.b", ["验证码", "CoDe", "a.b"]),
+            ("literal-miss", "axb unrelated body", []),
+        ):
+            with self.subTest(key=key):
+                received = self._keyword_receive(device_id, key, body)
+                self.assertEqual(received["delivery_count"], 1 if matched_keywords else 0)
+                message, deliveries = self._keyword_records(headers, received["message_id"])
+                self.assertEqual(len(deliveries), 1)
+                status = "matched" if matched_keywords else "unmatched"
+                expected = [{
+                    "group_id": group_id,
+                    "group_name": "字面关键词",
+                    "status": status,
+                    "keywords": ["验证码", "CoDe", "a.b", "Straße"],
+                    "matched_keywords": matched_keywords,
+                }]
+                self.assertEqual(message["keyword_status"], status)
+                self.assertEqual(message["keyword_matches"], expected)
+                self.assertEqual(deliveries[0]["keyword_status"], status)
+                self.assertEqual(deliveries[0]["keyword_matches"], expected)
+                self.assertFalse(deliveries[0]["direct_route"])
+                self.assertEqual(deliveries[0]["status"], "pending" if matched_keywords else "filtered")
+                self.assertEqual(message["status"], "queued" if matched_keywords else "filtered")
+
+    def test_keyword_unrestricted_groups_and_legacy_routes(self):
+        headers, device_id = self._keyword_fixture("unrestricted")
+        group_destination = self._keyword_destination(headers, "keyword-empty")
+        direct_destination = self._keyword_destination(headers, "keyword-direct")
+        group_id = self._keyword_group(headers, device_id, [group_destination], "空关键词", [])
+        self.assertEqual(self.client.post("/api/admin/routes", headers=headers, json={"device_id": device_id, "destination_id": direct_destination}).status_code, 200)
+        received = self._keyword_receive(device_id, "unrestricted", "any text")
+        self.assertEqual(received["delivery_count"], 2)
+        message, deliveries = self._keyword_records(headers, received["message_id"])
+        self.assertEqual(message["keyword_status"], "unrestricted")
+        self.assertEqual(len(message["keyword_matches"]), 1)
+        by_destination = {item["destination_id"]: item for item in deliveries}
+        self.assertEqual(by_destination[group_destination]["keyword_status"], "unrestricted")
+        self.assertEqual(by_destination[group_destination]["keyword_matches"][0]["group_id"], group_id)
+        self.assertEqual(by_destination[group_destination]["keyword_matches"][0]["matched_keywords"], [])
+        self.assertFalse(by_destination[group_destination]["direct_route"])
+        self.assertEqual(by_destination[direct_destination]["keyword_status"], "unrestricted")
+        self.assertEqual(by_destination[direct_destination]["keyword_matches"], [])
+        self.assertTrue(by_destination[direct_destination]["direct_route"])
+
+    def test_keyword_overlapping_groups_direct_routes_and_snapshot_dedup(self):
+        headers, device_id = self._keyword_fixture("overlap")
+        first_destination = self._keyword_destination(headers, "keyword-overlap-first")
+        second_destination = self._keyword_destination(headers, "keyword-overlap-second")
+        miss_id = self._keyword_group(headers, device_id, [first_destination], "未命中的组", ["missing"])
+        hit_id = self._keyword_group(headers, device_id, [first_destination, second_destination], "命中的组", ["code"])
+        empty_id = self._keyword_group(headers, device_id, [first_destination], "无需匹配的组", [])
+        self.assertEqual(self.client.post("/api/admin/routes", headers=headers, json={"device_id": device_id, "destination_id": first_destination}).status_code, 200)
+        received = self._keyword_receive(device_id, "overlap", "CODE 1234")
+        duplicate = self._keyword_receive(device_id, "overlap", "CODE 1234")
+        self.assertFalse(received["duplicate"])
+        self.assertTrue(duplicate["duplicate"])
+        self.assertEqual(received["message_id"], duplicate["message_id"])
+        self.assertEqual(received["delivery_count"], 2)
+        message, deliveries = self._keyword_records(headers, received["message_id"])
+        self.assertEqual(len(deliveries), 2)
+        self.assertEqual(message["keyword_status"], "matched")
+        self.assertEqual({item["group_id"] for item in message["keyword_matches"]}, {miss_id, hit_id, empty_id})
+        self.assertEqual(len(message["keyword_matches"]), 3)
+        first = next(item for item in deliveries if item["destination_id"] == first_destination)
+        second = next(item for item in deliveries if item["destination_id"] == second_destination)
+        self.assertTrue(first["direct_route"])
+        self.assertEqual(first["keyword_status"], "matched")
+        self.assertEqual({item["group_id"]: item["status"] for item in first["keyword_matches"]}, {miss_id: "unmatched", hit_id: "matched", empty_id: "unrestricted"})
+        self.assertFalse(second["direct_route"])
+        self.assertEqual(second["keyword_matches"][0]["group_id"], hit_id)
+
+    def test_keyword_direct_route_allows_unmatched_group(self):
+        headers, device_id = self._keyword_fixture("direct-bypass")
+        destination = self._keyword_destination(headers, "keyword-direct-bypass")
+        self._keyword_group(headers, device_id, [destination], "直连与未命中组", ["missing"])
+        self.assertEqual(self.client.post("/api/admin/routes", headers=headers, json={"device_id": device_id, "destination_id": destination}).status_code, 200)
+        received = self._keyword_receive(device_id, "direct-bypass", "other text")
+        self.assertEqual(received["delivery_count"], 1)
+        message, deliveries = self._keyword_records(headers, received["message_id"])
+        self.assertEqual(message["keyword_status"], "unrestricted")
+        self.assertEqual(deliveries[0]["keyword_status"], "unrestricted")
+        self.assertEqual(deliveries[0]["status"], "pending")
+        self.assertEqual(deliveries[0]["keyword_matches"][0]["status"], "unmatched")
+
+    def test_keyword_filtered_sms_cannot_retry_or_enter_outbound_queue(self):
+        headers, device_id = self._keyword_fixture("filtered-sms")
+        destination = self._keyword_destination(headers, "keyword-filtered-sms", kind="sms_forward")
+        self._keyword_group(headers, device_id, [destination], "短信过滤", ["验证码"])
+        received = self._keyword_receive(device_id, "filtered-sms", "普通通知")
+        duplicate = self._keyword_receive(device_id, "filtered-sms", "普通通知")
+        self.assertEqual(received["delivery_count"], 0)
+        self.assertTrue(duplicate["duplicate"])
+        message, deliveries = self._keyword_records(headers, received["message_id"])
+        self.assertEqual(len(deliveries), 1)
+        delivery = deliveries[0]
+        self.assertEqual(delivery["status"], "filtered")
+        self.assertEqual(delivery["attempts"], 0)
+        retry = self.client.post(f"/api/admin/deliveries/{delivery['id']}/retry", headers=headers, json={})
+        self.assertEqual(retry.status_code, 409)
+        with patch.object(self.module, "deliver") as deliver, patch.object(self.module, "enqueue_sms_forward") as enqueue:
+            self.module.process_delivery(delivery["id"])
+        deliver.assert_not_called()
+        enqueue.assert_not_called()
+        self.module.init_db()
+        message_after, deliveries_after = self._keyword_records(headers, received["message_id"])
+        self.assertEqual(message_after["status"], "filtered")
+        self.assertEqual(deliveries_after[0]["status"], "filtered")
+        self.assertEqual(deliveries_after[0]["attempts"], 0)
+        with self.module.db_connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM outbound_sms").fetchone()[0], 0)
+
+    def test_keyword_filtered_targets_do_not_block_message_completion(self):
+        headers, device_id = self._keyword_fixture("completion")
+        allowed = self._keyword_destination(headers, "keyword-completion-allowed")
+        filtered = self._keyword_destination(headers, "keyword-completion-filtered")
+        self._keyword_group(headers, device_id, [allowed], "完成时命中", ["code"])
+        self._keyword_group(headers, device_id, [filtered], "完成时未命中", ["missing"])
+        received = self._keyword_receive(device_id, "completion", "CODE 1234")
+        self.assertEqual(received["delivery_count"], 1)
+        _, deliveries = self._keyword_records(headers, received["message_id"])
+        self.assertEqual(len(deliveries), 2)
+        delivery = next(item for item in deliveries if item["destination_id"] == allowed)
+        with patch.object(self.module, "deliver", return_value=(True, 200, "", "{}")) as send:
+            self.module.process_delivery(delivery["id"])
+        send.assert_called_once()
+        message, deliveries = self._keyword_records(headers, received["message_id"])
+        self.assertEqual(message["status"], "delivered")
+        self.assertEqual(message["keyword_status"], "matched")
+        self.assertEqual({item["status"] for item in deliveries}, {"delivered", "filtered"})
+        self.assertEqual(self.client.get("/api/admin/snapshot", headers=headers).json["stats"]["pending"], 0)
+
+    def test_keyword_missed_calls_ignore_sms_keywords(self):
+        headers, device_id = self._keyword_fixture("calls")
+        destination = self._keyword_destination(headers, "keyword-call")
+        group_id = self._keyword_group(headers, device_id, [destination], "电话不匹配短信关键词", ["unlikely-keyword"])
+        response = self.client.post(
+            "/api/device/missed-call",
+            json={"token": "sms-sb", "device_id": device_id, "call_id": "keyword-call", "caller": "10086"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["delivery_count"], 1)
+        snapshot = self.client.get("/api/admin/snapshot", headers=headers).json
+        call = next(item for item in snapshot["missed_calls"] if item["id"] == response.json["message_id"])
+        delivery = next(item for item in snapshot["deliveries"] if item["message_id"] == response.json["message_id"])
+        self.assertEqual(call["keyword_status"], "not_applicable")
+        self.assertEqual(delivery["keyword_status"], "not_applicable")
+        self.assertEqual(delivery["status"], "pending")
+        self.assertEqual(delivery["keyword_matches"][0]["group_id"], group_id)
+        self.assertEqual(delivery["keyword_matches"][0]["status"], "not_applicable")
+        self.assertEqual(delivery["keyword_matches"][0]["matched_keywords"], [])
+
+    def test_keyword_disabled_routes_and_device_switch(self):
+        headers, device_id = self._keyword_fixture("disabled")
+        destination = self._keyword_destination(headers, "keyword-disabled-group")
+        disabled_destination = self._keyword_destination(headers, "keyword-disabled-target", enabled=False)
+        self._keyword_group(headers, device_id, [destination], "停用的组", ["code"], enabled=False)
+        self._keyword_group(headers, device_id, [disabled_destination], "停用目标的组", ["code"])
+        received = self._keyword_receive(device_id, "no-route", "code")
+        self.assertEqual(received["delivery_count"], 0)
+        message, deliveries = self._keyword_records(headers, received["message_id"])
+        self.assertEqual(message["keyword_status"], "no_route")
+        self.assertEqual(message["keyword_matches"], [])
+        self.assertEqual(deliveries, [])
+
+        self._keyword_group(headers, device_id, [destination], "可用的组", ["code"])
+        self.assertEqual(self.client.patch(f"/api/admin/devices/{device_id}", headers=headers, json={"sms_forward_enabled": False}).status_code, 200)
+        received = self._keyword_receive(device_id, "switch-off", "code")
+        self.assertEqual(received["delivery_count"], 0)
+        message, deliveries = self._keyword_records(headers, received["message_id"])
+        self.assertEqual(message["keyword_status"], "disabled")
+        self.assertEqual(deliveries, [])
+
+    def test_keyword_decisions_survive_group_edit_delete_and_restart(self):
+        headers, device_id = self._keyword_fixture("history")
+        destination = self._keyword_destination(headers, "keyword-history")
+        group_id = self._keyword_group(headers, device_id, [destination], "原始关键词组", ["code"])
+        matched = self._keyword_receive(device_id, "history-hit", "CODE 1234")
+        missed = self._keyword_receive(device_id, "history-miss", "ordinary message")
+        expected = {
+            item["message_id"]: self._keyword_records(headers, item["message_id"])
+            for item in (matched, missed)
+        }
+        self._keyword_group(headers, device_id, [destination], "已修改关键词组", ["ordinary"], id=group_id)
+        self.assertEqual(self.client.delete(f"/api/admin/channel-groups/{group_id}", headers=headers).status_code, 200)
+        self.module.init_db()
+        for message_id, (message_before, deliveries_before) in expected.items():
+            with self.subTest(message_id=message_id):
+                message_after, deliveries_after = self._keyword_records(headers, message_id)
+                self.assertEqual(message_after["keyword_status"], message_before["keyword_status"])
+                self.assertEqual(message_after["keyword_matches"], message_before["keyword_matches"])
+                self.assertEqual(deliveries_after[0]["keyword_status"], deliveries_before[0]["keyword_status"])
+                self.assertEqual(deliveries_after[0]["keyword_matches"], deliveries_before[0]["keyword_matches"])
+                self.assertEqual(deliveries_after[0]["keyword_matches"][0]["group_name"], "原始关键词组")
+        with patch.object(self.module, "deliver", return_value=(True, 200, "", "{}")) as send:
+            self.module.process_delivery(expected[matched["message_id"]][1][0]["id"])
+        send.assert_called_once()
 
     def test_channel_group_routes_multiple_devices(self):
         headers = {"X-SMS-Admin-Token": "admin-test"}
