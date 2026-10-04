@@ -66,6 +66,7 @@ DEFAULT_SMS_TEMPLATE_BODY = (
     "时间：{{time}}\n"
     "内容：{{sms}}"
 )
+DEFAULT_CALL_TEMPLATE_NAME = "默认来电通知模板"
 DEFAULT_CALL_TEMPLATE_BODY = "未接来电\n设备：{{device}}\n接收卡：{{receiver}}\n来电号码：{{ori}}\n入库时间：{{time}}"
 SMS_TEMPLATE_PLACEHOLDERS = frozenset(
     {"ori", "sms", "receiver", "phone", "time", "device"}
@@ -74,6 +75,17 @@ SMS_TEMPLATE_PATTERN = re.compile(r"\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}")
 TEMPLATED_DESTINATION_KINDS = frozenset(
     {"sms_forward", "feishu_app", "feishu_webhook"}
 )
+CALL_TEMPLATED_DESTINATION_KINDS = frozenset(
+    {"sms_forward", "feishu_app", "feishu_webhook", "wecom_webhook"}
+)
+ROUTING_EVENT_TYPES = frozenset({"sms", "missed_call", "both"})
+
+
+def validate_routing_event_type(value):
+    event_type = text_value(value, 20) or "both"
+    if event_type not in ROUTING_EVENT_TYPES:
+        raise ValueError("event_type must be one of: sms, missed_call, both")
+    return event_type
 
 app = Flask(__name__, static_folder="static")
 app.json.ensure_ascii = False
@@ -181,6 +193,7 @@ def init_db():
                 device_id TEXT NOT NULL DEFAULT '*',
                 destination_id INTEGER NOT NULL REFERENCES destinations(id) ON DELETE CASCADE,
                 enabled INTEGER NOT NULL DEFAULT 1,
+                event_type TEXT NOT NULL DEFAULT 'both',
                 UNIQUE(device_id, destination_id)
             );
 
@@ -189,6 +202,7 @@ def init_db():
                 name TEXT NOT NULL UNIQUE,
                 description TEXT NOT NULL DEFAULT '',
                 enabled INTEGER NOT NULL DEFAULT 1,
+                event_type TEXT NOT NULL DEFAULT 'both',
                 keywords_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -257,6 +271,15 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS sms_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                body TEXT NOT NULL,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS call_templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
                 body TEXT NOT NULL,
@@ -354,6 +377,9 @@ def init_db():
             CREATE UNIQUE INDEX IF NOT EXISTS idx_sms_templates_one_default
                 ON sms_templates(is_default)
                 WHERE is_default=1;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_call_templates_one_default
+                ON call_templates(is_default)
+                WHERE is_default=1;
             CREATE INDEX IF NOT EXISTS idx_feishu_sms_replies_notification
                 ON feishu_sms_replies(next_notification_at, notified_status);
             CREATE INDEX IF NOT EXISTS idx_feishu_reply_inbox_due
@@ -399,8 +425,44 @@ def init_db():
         for field in ("sms_forward_enabled", "call_forward_enabled"):
             if field not in device_columns:
                 db.execute(f"ALTER TABLE devices ADD COLUMN {field} INTEGER NOT NULL DEFAULT 1")
-        db.execute("CREATE TABLE IF NOT EXISTS call_template (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)")
-        db.execute("INSERT OR IGNORE INTO call_template(id, body) VALUES (1, ?)", (DEFAULT_CALL_TEMPLATE_BODY,))
+        route_columns = {
+            row["name"] for row in db.execute("PRAGMA table_info(routes)")
+        }
+        if "event_type" not in route_columns:
+            db.execute(
+                "ALTER TABLE routes ADD COLUMN event_type TEXT NOT NULL DEFAULT 'both'"
+            )
+        channel_group_columns = {
+            row["name"] for row in db.execute("PRAGMA table_info(channel_groups)")
+        }
+        if "event_type" not in channel_group_columns:
+            db.execute(
+                "ALTER TABLE channel_groups ADD COLUMN event_type TEXT NOT NULL DEFAULT 'both'"
+            )
+        if db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_template'"
+        ).fetchone():
+            legacy_call_template = db.execute(
+                "SELECT body FROM call_template WHERE id=1"
+            ).fetchone()
+            if legacy_call_template and not db.execute(
+                "SELECT 1 FROM call_templates"
+            ).fetchone():
+                legacy_now = utc_now()
+                db.execute(
+                    """
+                    INSERT INTO call_templates (
+                        name, body, is_default, created_at, updated_at
+                    ) VALUES (?, ?, 1, ?, ?)
+                    """,
+                    (
+                        DEFAULT_CALL_TEMPLATE_NAME,
+                        legacy_call_template["body"],
+                        legacy_now,
+                        legacy_now,
+                    ),
+                )
+            db.execute("DROP TABLE call_template")
         if "traffic_total_bytes" not in device_columns:
             db.execute(
                 "ALTER TABLE devices ADD COLUMN traffic_total_bytes "
@@ -537,6 +599,32 @@ def init_db():
                 UPDATE sms_templates
                 SET is_default=1, updated_at=?
                 WHERE id=(SELECT MIN(id) FROM sms_templates)
+                """,
+                (now,),
+            )
+        db.execute(
+            """
+            INSERT INTO call_templates (
+                name, body, is_default, created_at, updated_at
+            )
+            SELECT ?, ?, 1, ?, ?
+            WHERE NOT EXISTS (SELECT 1 FROM call_templates)
+            """,
+            (
+                DEFAULT_CALL_TEMPLATE_NAME,
+                DEFAULT_CALL_TEMPLATE_BODY,
+                now,
+                now,
+            ),
+        )
+        if not db.execute(
+            "SELECT 1 FROM call_templates WHERE is_default=1"
+        ).fetchone():
+            db.execute(
+                """
+                UPDATE call_templates
+                SET is_default=1, updated_at=?
+                WHERE id=(SELECT MIN(id) FROM call_templates)
                 """,
                 (now,),
             )
@@ -1221,7 +1309,8 @@ def backfill_feishu_delivery_references(db, destination, items):
         return 0
 
     config = json.loads(destination["config_json"] or "{}")
-    template_body = resolve_sms_template_body(db, config.get("template_id"))
+    sms_template_body = resolve_sms_template_body(db, config.get("template_id"))
+    call_template_body = resolve_call_template_body(db, config.get("call_template_id"))
 
     updated = 0
     for row in db.execute(
@@ -1246,6 +1335,9 @@ def backfill_feishu_delivery_references(db, destination, items):
         """,
         (destination["id"],),
     ).fetchall():
+        template_body = (
+            call_template_body if row["event_type"] == "missed_call" else sms_template_body
+        )
         item = app_messages.get(formatted_feishu_message(row, template_body))
         if not item:
             item = app_messages.get(formatted_feishu_message(row))
@@ -1636,9 +1728,10 @@ def queue_deliveries(db, message_id, device_id):
             SELECT DISTINCT d.id
             FROM destinations d JOIN routes r ON r.destination_id=d.id
             WHERE d.enabled=1 AND r.enabled=1 AND r.device_id IN ('*', ?)
+              AND r.event_type IN ('both', ?)
             ORDER BY d.id
             """,
-            (device_id,),
+            (device_id, event["event_type"]),
         ).fetchall()
     }
     group_rows = db.execute(
@@ -1650,9 +1743,10 @@ def queue_deliveries(db, message_id, device_id):
         JOIN channel_group_destinations cgd ON cgd.group_id=cg.id
         JOIN destinations d ON d.id=cgd.destination_id
         WHERE cg.enabled=1 AND cgdev.device_id=? AND d.enabled=1
+          AND cg.event_type IN ('both', ?)
         ORDER BY cg.id, d.id
         """,
-        (device_id,),
+        (device_id, event["event_type"]),
     ).fetchall()
     group_matches = {}
     destination_matches = {destination_id: [] for destination_id in direct_destinations}
@@ -2498,6 +2592,7 @@ def admin_snapshot():
             """
         ).fetchall()]
         sms_templates = list_sms_templates(db)
+        call_templates = list_call_templates(db)
         call_template = resolve_call_template_body(db)
         mcp_tokens = list_mcp_tokens(db)
         stats = {
@@ -2537,6 +2632,7 @@ def admin_snapshot():
             "outbound_sms": outbound_sms,
             "sms_templates": sms_templates,
             "call_template": call_template,
+            "call_templates": call_templates,
             "mcp_tokens": mcp_tokens,
             "offline_seconds": OFFLINE_SECONDS,
         }
@@ -2771,13 +2867,35 @@ def update_device(device_id):
     return jsonify({"code": 0})
 
 
-def resolve_call_template_body(db):
-    row = db.execute("SELECT body FROM call_template WHERE id=1").fetchone()
-    return row["body"] if row else DEFAULT_CALL_TEMPLATE_BODY
+def list_call_templates(db):
+    return [
+        {**dict(row), "is_default": bool(row["is_default"])}
+        for row in db.execute(
+            """
+            SELECT id, name, body, is_default, created_at, updated_at
+            FROM call_templates
+            ORDER BY is_default DESC, id
+            """
+        ).fetchall()
+    ]
+
+
+def resolve_call_template_body(db, call_template_id=None):
+    template = None
+    if call_template_id:
+        template = db.execute(
+            "SELECT body FROM call_templates WHERE id=?",
+            (call_template_id,),
+        ).fetchone()
+    if not template:
+        template = db.execute(
+            "SELECT body FROM call_templates WHERE is_default=1"
+        ).fetchone()
+    return template["body"] if template else DEFAULT_CALL_TEMPLATE_BODY
 
 
 @app.put("/api/admin/call-template")
-def save_call_template():
+def save_legacy_call_template():
     denied = require_admin()
     if denied:
         return denied
@@ -2786,7 +2904,147 @@ def save_call_template():
     except ValueError as exc:
         return jsonify({"code": 400, "message": str(exc)}), 400
     with db_connect() as db:
-        db.execute("UPDATE call_template SET body=? WHERE id=1", (body,))
+        db.execute(
+            "UPDATE call_templates SET body=?, updated_at=? WHERE is_default=1",
+            (body, utc_now()),
+        )
+    return jsonify({"code": 0})
+
+
+@app.post("/api/admin/call-templates")
+def save_call_template():
+    denied = require_admin()
+    if denied:
+        return denied
+    data = request_json()
+    template_id = data.get("id")
+    name = text_value(data.get("name"), 120)
+    if not name:
+        return jsonify({"code": 400, "message": "name is required"}), 400
+    try:
+        body = validate_sms_template_body(data.get("body"))
+    except ValueError as exc:
+        return jsonify({"code": 400, "message": str(exc)}), 400
+    is_default = bool(data.get("is_default"))
+    now = utc_now()
+    try:
+        with db_connect() as db:
+            if template_id:
+                try:
+                    template_id = int(template_id)
+                except (TypeError, ValueError):
+                    return jsonify(
+                        {"code": 400, "message": "id must be an integer"}
+                    ), 400
+                if not db.execute(
+                    "SELECT 1 FROM call_templates WHERE id=?",
+                    (template_id,),
+                ).fetchone():
+                    return jsonify(
+                        {"code": 404, "message": "call template not found"}
+                    ), 404
+                if is_default:
+                    db.execute(
+                        "UPDATE call_templates SET is_default=0 WHERE is_default=1"
+                    )
+                db.execute(
+                    """
+                    UPDATE call_templates
+                    SET name=?, body=?, is_default=?, updated_at=?
+                    WHERE id=?
+                    """,
+                    (name, body, 1 if is_default else 0, now, template_id),
+                )
+            else:
+                if is_default:
+                    db.execute(
+                        "UPDATE call_templates SET is_default=0 WHERE is_default=1"
+                    )
+                cursor = db.execute(
+                    """
+                    INSERT INTO call_templates (
+                        name, body, is_default, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (name, body, 1 if is_default else 0, now, now),
+                )
+                template_id = cursor.lastrowid
+            if not db.execute(
+                "SELECT 1 FROM call_templates WHERE is_default=1"
+            ).fetchone():
+                db.execute(
+                    """
+                    UPDATE call_templates
+                    SET is_default=1, updated_at=?
+                    WHERE id=(SELECT MIN(id) FROM call_templates)
+                    """,
+                    (now,),
+                )
+        return jsonify({"code": 0, "id": template_id})
+    except sqlite3.IntegrityError:
+        return jsonify(
+            {"code": 409, "message": "call template name already exists"}
+        ), 409
+
+
+@app.post("/api/admin/call-templates/<int:template_id>/default")
+def set_default_call_template(template_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    with db_connect() as db:
+        if not db.execute(
+            "SELECT 1 FROM call_templates WHERE id=?",
+            (template_id,),
+        ).fetchone():
+            return jsonify(
+                {"code": 404, "message": "call template not found"}
+            ), 404
+        db.execute("UPDATE call_templates SET is_default=0 WHERE is_default=1")
+        db.execute(
+            "UPDATE call_templates SET is_default=1, updated_at=? WHERE id=?",
+            (utc_now(), template_id),
+        )
+    return jsonify({"code": 0})
+
+
+@app.delete("/api/admin/call-templates/<int:template_id>")
+def delete_call_template(template_id):
+    denied = require_admin()
+    if denied:
+        return denied
+    with db_connect() as db:
+        template = db.execute(
+            "SELECT is_default FROM call_templates WHERE id=?",
+            (template_id,),
+        ).fetchone()
+        if not template:
+            return jsonify(
+                {"code": 404, "message": "call template not found"}
+            ), 404
+        if template["is_default"]:
+            return jsonify(
+                {
+                    "code": 409,
+                    "message": "set another default template before deleting this one",
+                }
+            ), 409
+        for row in db.execute(
+            """
+            SELECT id, config_json
+            FROM destinations
+            WHERE kind IN ('sms_forward', 'feishu_app', 'feishu_webhook', 'wecom_webhook')
+            """
+        ).fetchall():
+            config = json.loads(row["config_json"] or "{}")
+            if config.get("call_template_id") == template_id:
+                return jsonify(
+                    {
+                        "code": 409,
+                        "message": "call template is used by a destination",
+                    }
+                ), 409
+        db.execute("DELETE FROM call_templates WHERE id=?", (template_id,))
     return jsonify({"code": 0})
 
 
@@ -2824,6 +3082,25 @@ def validate_destination(kind, config, db=None):
             (template_id,),
         ).fetchone():
             raise ValueError("template_id does not match an SMS template")
+    call_template_id = None
+    if kind in CALL_TEMPLATED_DESTINATION_KINDS:
+        call_template_id = config.get("call_template_id")
+        if call_template_id in (None, ""):
+            config.pop("call_template_id", None)
+            call_template_id = None
+        else:
+            try:
+                call_template_id = int(call_template_id)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("call_template_id must be an integer") from exc
+            if call_template_id < 1:
+                raise ValueError("call_template_id must be a positive integer")
+            config["call_template_id"] = call_template_id
+        if db is not None and call_template_id and not db.execute(
+            "SELECT 1 FROM call_templates WHERE id=?",
+            (call_template_id,),
+        ).fetchone():
+            raise ValueError("call_template_id does not match a call template")
     if kind == "sms_forward":
         config["recipient"] = normalize_recipient(config["recipient"])
         sender_device_id = text_value(config.get("sender_device_id"), 80)
@@ -3066,16 +3343,27 @@ def save_route():
         destination_id = int(data.get("destination_id"))
     except (TypeError, ValueError):
         return jsonify({"code": 400, "message": "destination_id is required"}), 400
+    try:
+        event_type = (
+            validate_routing_event_type(data["event_type"])
+            if "event_type" in data else None
+        )
+    except ValueError as exc:
+        return jsonify({"code": 400, "message": str(exc)}), 400
     with db_connect() as db:
         try:
             cursor = db.execute(
                 """
-                INSERT INTO routes (device_id, destination_id, enabled)
-                VALUES (?, ?, ?)
+                INSERT INTO routes (device_id, destination_id, enabled, event_type)
+                VALUES (?, ?, ?, COALESCE(?, 'both'))
                 ON CONFLICT(device_id, destination_id)
-                DO UPDATE SET enabled=excluded.enabled
+                DO UPDATE SET enabled=excluded.enabled,
+                    event_type=COALESCE(?, routes.event_type)
                 """,
-                (device_id, destination_id, 1 if data.get("enabled", True) else 0),
+                (
+                    device_id, destination_id, 1 if data.get("enabled", True) else 0,
+                    event_type, event_type,
+                ),
             )
         except sqlite3.IntegrityError:
             return jsonify({"code": 404, "message": "destination not found"}), 404
@@ -3158,6 +3446,10 @@ def save_channel_group():
         return jsonify({"code": 400, "message": "name is required"}), 400
     description = text_value(data.get("description"), 500)
     try:
+        event_type = (
+            validate_routing_event_type(data["event_type"])
+            if "event_type" in data else None
+        )
         group_id = int(data["id"]) if data.get("id") else None
         device_ids = unique_values(
             data.get("device_ids"),
@@ -3184,7 +3476,8 @@ def save_channel_group():
                     """
                     UPDATE channel_groups
                     SET name=?, description=?, enabled=?, updated_at=?,
-                        keywords_json=COALESCE(?, keywords_json)
+                        keywords_json=COALESCE(?, keywords_json),
+                        event_type=COALESCE(?, event_type)
                     WHERE id=?
                     """,
                     (
@@ -3193,6 +3486,7 @@ def save_channel_group():
                         1 if data.get("enabled", True) else 0,
                         now,
                         keywords_json,
+                        event_type,
                         group_id,
                     ),
                 )
@@ -3204,8 +3498,9 @@ def save_channel_group():
                 cursor = db.execute(
                     """
                     INSERT INTO channel_groups
-                        (name, description, enabled, created_at, updated_at, keywords_json)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                        (name, description, enabled, created_at, updated_at,
+                         keywords_json, event_type)
+                    VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, 'both'))
                     """,
                     (
                         name,
@@ -3214,6 +3509,7 @@ def save_channel_group():
                         now,
                         now,
                         keywords_json if keywords_json is not None else "[]",
+                        event_type,
                     ),
                 )
                 group_id = cursor.lastrowid
@@ -3800,10 +4096,10 @@ def refresh_message_status(db, message_id):
 
 
 def forwarded_sms_content(
-    db, message, template_id=None, current_device_phone=None
+    db, message, template_id=None, current_device_phone=None, call_template_id=None
 ):
     if record_value(message, "event_type", "sms") == "missed_call":
-        content = render_sms_template(resolve_call_template_body(db), message, current_device_phone)
+        content = render_sms_template(resolve_call_template_body(db, call_template_id), message, current_device_phone)
         if len(content) > MAX_OUTBOUND_SMS_LENGTH:
             raise ValueError(f"forwarded SMS exceeds {MAX_OUTBOUND_SMS_LENGTH} characters")
         return content
@@ -3918,6 +4214,7 @@ def enqueue_sms_forward(db, delivery):
                 delivery,
                 config.get("template_id"),
                 sender_device["phone_number"],
+                config.get("call_template_id"),
             ),
             now,
         ),
@@ -3981,7 +4278,7 @@ def process_delivery(delivery_id):
             config = json.loads(row["config_json"] or "{}")
             formatted_message = formatted_feishu_message(
                 row,
-                resolve_call_template_body(db) if row["event_type"] == "missed_call" else resolve_sms_template_body(db, config.get("template_id")),
+                resolve_call_template_body(db, config.get("call_template_id")) if row["event_type"] == "missed_call" else resolve_sms_template_body(db, config.get("template_id")),
             )
         db.execute(
             "UPDATE deliveries SET status='sending', last_attempt_at=? WHERE id=?",

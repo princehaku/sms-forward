@@ -7,6 +7,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -345,7 +346,7 @@ class SmsCenterTest(unittest.TestCase):
         self.module.DATABASE_PATH = Path(self.temp_dir.name) / "traffic-legacy.db"
         self.addCleanup(setattr, self.module, "DATABASE_PATH", original_path)
         device_id = "dev-traffic-legacy"
-        with sqlite3.connect(self.module.DATABASE_PATH) as db:
+        with closing(sqlite3.connect(self.module.DATABASE_PATH)) as db, db:
             db.execute("""
                 CREATE TABLE devices (
                     id TEXT PRIMARY KEY,
@@ -2244,6 +2245,194 @@ class SmsCenterTest(unittest.TestCase):
             item for item in snapshot["deliveries"] if item["message_id"] == message_id
         ]
         return message, deliveries
+
+    def test_routing_event_scope_and_sms_keywords_are_both_preserved(self):
+        headers, device_id = self._keyword_fixture("event-scope")
+        direct_ids, group_ids = {}, {}
+        for event in ("sms", "missed_call", "both"):
+            direct_ids[event] = self._keyword_destination(headers, f"direct-{event}")
+            route = {"device_id": device_id, "destination_id": direct_ids[event]}
+            if event != "both":
+                route["event_type"] = event
+            self.assertEqual(self.client.post("/api/admin/routes", headers=headers, json=route).status_code, 200)
+            destination = self._keyword_destination(headers, f"group-{event}")
+            scope = {"event_type": event} if event != "both" else {}
+            group_id = self._keyword_group(headers, device_id, [destination], f"scope-{event}", ["code"], **scope)
+            group_ids[event] = (group_id, destination)
+
+        def records(message_id):
+            snapshot = self.client.get("/api/admin/snapshot", headers=headers).json
+            return {row["destination_id"]: row for row in snapshot["deliveries"] if row["message_id"] == message_id}
+
+        hit = self._keyword_receive(device_id, "scope-hit", "CODE 1234")
+        self.assertEqual(hit["delivery_count"], 4)
+        self.assertEqual(set(records(hit["message_id"])), {direct_ids["sms"], direct_ids["both"], group_ids["sms"][1], group_ids["both"][1]})
+        missed = self._keyword_receive(device_id, "scope-miss", "ordinary message")
+        self.assertEqual(missed["delivery_count"], 2)
+        sms_records = records(missed["message_id"])
+        self.assertEqual({key for key, row in sms_records.items() if row["status"] == "filtered"}, {group_ids["sms"][1], group_ids["both"][1]})
+        call = self.client.post("/api/device/missed-call", json={"token": "sms-sb", "device_id": device_id, "call_id": "scope-call", "caller": "10086"})
+        self.assertEqual(call.status_code, 200)
+        self.assertEqual(call.json["delivery_count"], 4)
+        call_records = records(call.json["message_id"])
+        self.assertEqual(set(call_records), {direct_ids["missed_call"], direct_ids["both"], group_ids["missed_call"][1], group_ids["both"][1]})
+        self.assertTrue(all(row["keyword_status"] == "not_applicable" for row in call_records.values()))
+
+        # An older client changing another field must preserve existing scope.
+        self.assertEqual(self.client.post("/api/admin/routes", headers=headers, json={"device_id": device_id, "destination_id": direct_ids["sms"], "enabled": True}).status_code, 200)
+        self._keyword_group(headers, device_id, [group_ids["sms"][1]], "scope-sms", ["new"], id=group_ids["sms"][0])
+        before = self.client.get("/api/admin/snapshot", headers=headers).json
+        sms_route = next(row for row in before["routes"] if row["destination_id"] == direct_ids["sms"])
+        sms_group = next(row for row in before["channel_groups"] if row["id"] == group_ids["sms"][0])
+        self.assertEqual(sms_route["event_type"], "sms")
+        self.assertEqual(sms_group["event_type"], "sms")
+        self.assertEqual(sms_group["keywords"], ["new"])
+        self.assertEqual(self.client.post("/api/admin/routes", headers=headers, json={"device_id": device_id, "destination_id": direct_ids["sms"], "event_type": "invalid"}).status_code, 400)
+        self.assertEqual(self.client.post("/api/admin/channel-groups", headers=headers, json={"id": sms_group["id"], "name": sms_group["name"], "event_type": "invalid"}).status_code, 400)
+        after = self.client.get("/api/admin/snapshot", headers=headers).json
+        self.assertEqual(next(row for row in after["routes"] if row["id"] == sms_route["id"]), sms_route)
+        self.assertEqual(next(row for row in after["channel_groups"] if row["id"] == sms_group["id"]), sms_group)
+
+    def test_call_templates_crud_default_references_and_legacy_api(self):
+        headers, _ = self._keyword_fixture("call-crud")
+        initial = self.client.get("/api/admin/snapshot", headers=headers).json
+        default = next(row for row in initial["call_templates"] if row["is_default"])
+        self.assertEqual(initial["call_template"], default["body"])
+        self.assertEqual(self.client.post("/api/admin/call-templates", json={"name": "denied", "body": "body"}).status_code, 401)
+        self.assertEqual(self.client.post("/api/admin/call-templates", headers=headers, json={"name": "invalid", "body": "{{unknown}}"}).status_code, 400)
+        created = self.client.post("/api/admin/call-templates", headers=headers, json={"name": "custom call", "body": "CALL {{ori}}", "is_default": False})
+        self.assertEqual(created.status_code, 200)
+        template_id = created.json["id"]
+        self.assertEqual(self.client.post("/api/admin/call-templates", headers=headers, json={"name": "custom call", "body": "duplicate"}).status_code, 409)
+        self.assertEqual(self.client.post("/api/admin/call-templates", headers=headers, json={"id": 99999, "name": "missing", "body": "body"}).status_code, 404)
+        self.assertEqual(self.client.post("/api/admin/call-templates", headers=headers, json={"id": template_id, "name": "renamed call", "body": "UPDATED {{ori}}"}).status_code, 200)
+        self.assertEqual(self.client.post(f"/api/admin/call-templates/{template_id}/default", headers=headers).status_code, 200)
+        self.assertEqual(self.client.delete(f"/api/admin/call-templates/{template_id}", headers=headers).status_code, 409)
+        self.assertEqual(self.client.put("/api/admin/call-template", headers=headers, json={"body": "LEGACY {{ori}}"}).status_code, 200)
+        self.module.init_db()
+        snapshot = self.client.get("/api/admin/snapshot", headers=headers).json
+        self.assertEqual(snapshot["call_template"], "LEGACY {{ori}}")
+        self.assertEqual([row["id"] for row in snapshot["call_templates"] if row["is_default"]], [template_id])
+        self.assertEqual(next(row for row in snapshot["call_templates"] if row["id"] == template_id)["body"], "LEGACY {{ori}}")
+        self.assertEqual(self.client.post(f"/api/admin/call-templates/{default['id']}/default", headers=headers).status_code, 200)
+        target = self.client.post("/api/admin/destinations", headers=headers, json={"name": "used call template", "kind": "wecom_webhook", "config": {"url": "https://example.test/dummy", "call_template_id": template_id}})
+        self.assertEqual(target.status_code, 200)
+        self.assertEqual(self.client.delete(f"/api/admin/call-templates/{template_id}", headers=headers).status_code, 409)
+        self.assertEqual(self.client.delete(f"/api/admin/destinations/{target.json['id']}", headers=headers).status_code, 200)
+        self.assertEqual(self.client.delete(f"/api/admin/call-templates/{template_id}", headers=headers).status_code, 200)
+        self.assertEqual(self.client.delete(f"/api/admin/call-templates/{template_id}", headers=headers).status_code, 404)
+
+    def test_call_template_selection_for_all_supported_targets_preserves_sms_templates(self):
+        headers, device_id = self._keyword_fixture("call-targets")
+        self.client.patch(f"/api/admin/devices/{device_id}", headers=headers, json={"name": "dummy board"})
+        template = self.client.post("/api/admin/call-templates", headers=headers, json={"name": "selected call", "body": "SELECTED {{ori}} / {{device}}"})
+        self.assertEqual(template.status_code, 200)
+        template_id = template.json["id"]
+        sms_template = self.client.post("/api/admin/sms-templates", headers=headers, json={"name": "selected SMS", "body": "SMS {{sms}}"}).json["id"]
+        target_ids = {}
+        for kind in ("sms_forward", "feishu_app", "feishu_webhook", "wecom_webhook"):
+            config = {"url": "https://example.test/dummy", "call_template_id": str(template_id)}
+            if kind == "sms_forward":
+                config = {"recipient": "13800138999", "call_template_id": str(template_id)}
+            elif kind == "feishu_app":
+                config = {"app_id": "dummy-app", "app_secret": "dummy-secret", "receive_id": "dummy-chat", "call_template_id": str(template_id)}
+            if kind != "wecom_webhook":
+                config["template_id"] = sms_template
+            with self.subTest(kind=kind):
+                for bad_id in ("invalid", 0, 99999):
+                    invalid = self.client.post("/api/admin/destinations", headers=headers, json={"name": f"bad-{kind}", "kind": kind, "config": {**config, "call_template_id": bad_id}})
+                    self.assertEqual(invalid.status_code, 400)
+                target = self.client.post("/api/admin/destinations", headers=headers, json={"name": f"selected-{kind}", "kind": kind, "config": config})
+                self.assertEqual(target.status_code, 200)
+                target_ids[kind] = target.json["id"]
+                self.assertEqual(self.client.delete(f"/api/admin/call-templates/{template_id}", headers=headers).status_code, 409)
+        self._keyword_group(headers, device_id, list(target_ids.values()), "both events", ["code"])
+        snapshot = self.client.get("/api/admin/snapshot", headers=headers).json
+        self.assertTrue(all(row["config"].get("call_template_id") == template_id for row in snapshot["destinations"]))
+        call = self.client.post("/api/device/missed-call", json={"token": "sms-sb", "device_id": device_id, "call_id": "selected-call", "caller": "10086"}).json
+        self.assertEqual(call["delivery_count"], 4)
+        deliveries = self.client.get("/api/admin/snapshot", headers=headers).json["deliveries"]
+        for row in deliveries:
+            if row["destination_id"] == target_ids["sms_forward"]:
+                self.module.process_delivery(row["id"])
+            else:
+                with patch.object(self.module, "deliver", return_value=(True, 200, "", "{}")) as send:
+                    self.module.process_delivery(row["id"])
+                self.assertEqual(send.call_args.kwargs["formatted_message"], "SELECTED 10086 / dummy board")
+        snapshot = self.client.get("/api/admin/snapshot", headers=headers).json
+        self.assertEqual(len(snapshot["outbound_sms"]), 1)
+        self.assertEqual(snapshot["outbound_sms"][0]["body"], "SELECTED 10086 / dummy board")
+        received = self._keyword_receive(device_id, "selected-sms", "code 1234")
+        sms_deliveries = [row for row in self.client.get("/api/admin/snapshot", headers=headers).json["deliveries"] if row["message_id"] == received["message_id"]]
+        for row in sms_deliveries:
+            if row["destination_id"] == target_ids["sms_forward"]:
+                self.module.process_delivery(row["id"])
+            elif row["destination_id"] in (target_ids["feishu_app"], target_ids["feishu_webhook"]):
+                with patch.object(self.module, "deliver", return_value=(True, 200, "", "{}")) as send:
+                    self.module.process_delivery(row["id"])
+                self.assertEqual(send.call_args.kwargs["formatted_message"], "SMS code 1234")
+        bodies = {row["body"] for row in self.client.get("/api/admin/snapshot", headers=headers).json["outbound_sms"]}
+        self.assertEqual(bodies, {"SELECTED 10086 / dummy board", "SMS code 1234"})
+        with self.module.db_connect() as db:
+            message = {"event_type": "missed_call", "sender": "10086", "device_label": "dummy board", "device_phone": "", "body": "未接来电", "sms_time": "", "received_at": "today"}
+            self.assertEqual(self.module.forwarded_sms_content(db, message), self.module.render_sms_template(self.module.resolve_call_template_body(db), message))
+
+    def test_legacy_single_call_template_migrates_without_overwriting_plural_templates(self):
+        self._keyword_fixture("call-migration")
+        with self.module.db_connect() as db:
+            db.execute("DELETE FROM call_templates")
+            db.execute("CREATE TABLE call_template (id INTEGER PRIMARY KEY, body TEXT NOT NULL, updated_at TEXT NOT NULL)")
+            db.execute("INSERT INTO call_template VALUES (1, 'LEGACY {{ori}}', 'old')")
+        self.module.init_db()
+        with self.module.db_connect() as db:
+            self.assertEqual(self.module.resolve_call_template_body(db), "LEGACY {{ori}}")
+            before = [dict(row) for row in db.execute("SELECT * FROM call_templates")]
+            self.assertEqual(len(before), 1)
+            db.execute("CREATE TABLE call_template (id INTEGER PRIMARY KEY, body TEXT NOT NULL, updated_at TEXT NOT NULL)")
+            db.execute("INSERT INTO call_template VALUES (1, 'STALE {{ori}}', 'old')")
+        self.module.init_db()
+        self.module.init_db()
+        with self.module.db_connect() as db:
+            self.assertEqual([dict(row) for row in db.execute("SELECT * FROM call_templates")], before)
+            self.assertIsNone(db.execute("SELECT 1 FROM sqlite_master WHERE name='call_template'").fetchone())
+
+    def test_keyword_monthly_migration_preserves_existing_live_configuration_and_records(self):
+        headers, device_id = self._keyword_fixture("live-migration")
+        template = self.client.post("/api/admin/call-templates", headers=headers, json={"name": "preserved call", "body": "PRESERVED {{ori}}", "is_default": True}).json["id"]
+        target = self.client.post("/api/admin/destinations", headers=headers, json={"name": "preserved target", "kind": "sms_forward", "config": {"recipient": "13800138999", "call_template_id": template}}).json["id"]
+        self._keyword_group(headers, device_id, [target], "preserved sms group", [], event_type="sms")
+        self.client.post("/api/admin/routes", headers=headers, json={"device_id": device_id, "destination_id": target, "event_type": "missed_call"})
+        received = self._keyword_receive(device_id, "preserved-event", "dummy archived SMS")
+        with self.module.db_connect() as db:
+            db.execute("UPDATE devices SET traffic_total_bytes=9000, traffic_session_id='preserved-session', traffic_session_bytes=4000 WHERE id=?", (device_id,))
+            db.execute("UPDATE deliveries SET status='delivered', attempts=1, delivered_at='old' WHERE message_id=?", (received["message_id"],))
+            db.execute("UPDATE messages SET status='delivered' WHERE id=?", (received["message_id"],))
+            db.execute("INSERT INTO mcp_tokens (name, token_hash, token_value, token_prefix, scopes, created_at, last_used_at) VALUES ('dummy preserved token', 'dummy-hash', 'dummy-token-value', 'dummy', 'read,send', 'old', 'used')")
+            additions = {"devices": {"traffic_month", "traffic_month_bytes"}, "channel_groups": {"keywords_json"}, "messages": {"keyword_status", "keyword_matches_json"}, "deliveries": {"keyword_status", "keyword_matches_json", "direct_route"}}
+            tables = ("devices", "channel_groups", "channel_group_devices", "channel_group_destinations", "routes", "destinations", "call_templates", "sms_templates", "messages", "deliveries", "mcp_tokens")
+            columns, before = {}, {}
+            for table in tables:
+                columns[table] = [row["name"] for row in db.execute(f"PRAGMA table_info({table})") if row["name"] not in additions.get(table, set())]
+                before[table] = [tuple(row) for row in db.execute(f"SELECT {','.join(columns[table])} FROM {table} ORDER BY 1")]
+            for table, names in additions.items():
+                for name in names:
+                    db.execute(f"ALTER TABLE {table} DROP COLUMN {name}")
+        now = "2026-10-04T00:00:00+00:00"
+        with patch.object(self.module, "utc_now", return_value=now):
+            self.module.init_db()
+            self.module.init_db()
+        with self.module.db_connect() as db:
+            for table in tables:
+                self.assertEqual([tuple(row) for row in db.execute(f"SELECT {','.join(columns[table])} FROM {table} ORDER BY 1")], before[table], table)
+            self.assertEqual(db.execute("SELECT keywords_json FROM channel_groups").fetchone()["keywords_json"], "[]")
+            self.assertEqual(db.execute("SELECT keyword_status FROM messages").fetchone()["keyword_status"], "legacy")
+            device = db.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
+            self.assertEqual(device["traffic_month"], "2026-10")
+            self.assertEqual(device["traffic_month_bytes"], 0)
+        self._monthly_traffic_report(device_id, now, traffic_session_id="preserved-session", traffic_session_bytes=4500)
+        snapshot = self._monthly_traffic_snapshot(headers, device_id, now)
+        self.assertEqual(snapshot["traffic_month_bytes"], 500)
+        self.assertEqual(snapshot["traffic_total_bytes"], 9500)
 
     def test_keyword_group_normalization_validation_and_update(self):
         headers, device_id = self._keyword_fixture("validation")

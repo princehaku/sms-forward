@@ -406,7 +406,7 @@ def get_routing_summary() -> dict:
             dict(row)
             for row in db.execute(
                 """
-                SELECT r.id, r.device_id, r.enabled,
+                SELECT r.id, r.device_id, r.enabled, r.event_type,
                        d.id destination_id, d.name destination_name
                 FROM routes r
                 JOIN destinations d ON d.id=r.destination_id
@@ -418,7 +418,7 @@ def get_routing_summary() -> dict:
             dict(row)
             for row in db.execute(
                 """
-                SELECT id, name, description, enabled, keywords_json,
+                SELECT id, name, description, enabled, event_type, keywords_json,
                        created_at, updated_at
                 FROM channel_groups
                 ORDER BY id
