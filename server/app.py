@@ -36,6 +36,7 @@ MAX_OUTBOUND_SMS_LENGTH = 1000
 MAX_SMS_TEMPLATE_LENGTH = 4000
 MAX_CHANNEL_KEYWORDS = 50
 MAX_CHANNEL_KEYWORD_LENGTH = 100
+TRAFFIC_TIMEZONE = timezone(timedelta(hours=8))
 OUTBOUND_STALE_SECONDS = max(
     300, int(os.getenv("OUTBOUND_STALE_SECONDS", "900"))
 )
@@ -86,6 +87,28 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def traffic_month_key(now=None):
+    timestamp = datetime.fromisoformat(now or utc_now())
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(TRAFFIC_TIMEZONE).strftime("%Y-%m")
+
+
+def rollover_monthly_traffic(db, now=None, device_id=None):
+    month = traffic_month_key(now)
+    condition = "traffic_month<?"
+    parameters = [month, month]
+    if device_id is not None:
+        condition += " AND id=?"
+        parameters.append(device_id)
+    # Keep the session high-water mark so the next report adds only new bytes.
+    db.execute(
+        f"UPDATE devices SET traffic_month=?, traffic_month_bytes=0 WHERE {condition}",
+        parameters,
+    )
+    return month
+
+
 @contextmanager
 def db_connect():
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -117,6 +140,8 @@ def init_db():
                 signal INTEGER,
                 queue_count INTEGER NOT NULL DEFAULT 0,
                 traffic_total_bytes INTEGER NOT NULL DEFAULT 0,
+                traffic_month TEXT NOT NULL DEFAULT '',
+                traffic_month_bytes INTEGER NOT NULL DEFAULT 0,
                 traffic_session_id TEXT NOT NULL DEFAULT '',
                 traffic_session_bytes INTEGER NOT NULL DEFAULT 0,
                 traffic_updated_at TEXT NOT NULL DEFAULT '',
@@ -396,6 +421,13 @@ def init_db():
                 "ALTER TABLE devices ADD COLUMN traffic_updated_at "
                 "TEXT NOT NULL DEFAULT ''"
             )
+        for field, definition in (
+            ("traffic_month", "TEXT NOT NULL DEFAULT ''"),
+            ("traffic_month_bytes", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if field not in device_columns:
+                db.execute(f"ALTER TABLE devices ADD COLUMN {field} {definition}")
+        rollover_monthly_traffic(db)
         mcp_token_columns = {
             row["name"] for row in db.execute("PRAGMA table_info(mcp_tokens)")
         }
@@ -1486,14 +1518,15 @@ def upsert_device(db, data, remote_ip=None):
             raise ValueError("traffic_session_bytes must be an integer") from exc
         if traffic_session_bytes < 0:
             raise ValueError("traffic_session_bytes must be non-negative")
+    month = rollover_monthly_traffic(db, now, device_id)
     db.execute(
         """
         INSERT INTO devices (
             id, name, phone_number, firmware, app_version, network, signal,
-            queue_count, traffic_total_bytes, traffic_session_id,
+            queue_count, traffic_total_bytes, traffic_month, traffic_month_bytes, traffic_session_id,
             traffic_session_bytes, traffic_updated_at,
             first_seen, last_seen, last_ip, status_message
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             firmware=CASE WHEN excluded.firmware='' THEN devices.firmware ELSE excluded.firmware END,
             app_version=CASE WHEN excluded.app_version='' THEN devices.app_version ELSE excluded.app_version END,
@@ -1511,6 +1544,16 @@ def upsert_device(db, data, remote_ip=None):
                         excluded.traffic_session_bytes-devices.traffic_session_bytes
                     )
                 ELSE devices.traffic_total_bytes+excluded.traffic_session_bytes
+            END,
+            traffic_month_bytes=CASE
+                WHEN excluded.traffic_month<>devices.traffic_month
+                     OR excluded.traffic_session_id='' THEN devices.traffic_month_bytes
+                WHEN excluded.traffic_session_id=devices.traffic_session_id THEN
+                    devices.traffic_month_bytes + MAX(
+                        0,
+                        excluded.traffic_session_bytes-devices.traffic_session_bytes
+                    )
+                ELSE devices.traffic_month_bytes+excluded.traffic_session_bytes
             END,
             traffic_session_id=CASE
                 WHEN excluded.traffic_session_id='' THEN devices.traffic_session_id
@@ -1540,6 +1583,8 @@ def upsert_device(db, data, remote_ip=None):
             text_value(data.get("network"), 80),
             int(data["signal"]) if isinstance(data.get("signal"), (int, float)) else None,
             max(0, int(data.get("queue_count") or 0)),
+            traffic_session_bytes,
+            month,
             traffic_session_bytes,
             traffic_session_id,
             traffic_session_bytes,
@@ -2335,6 +2380,7 @@ def admin_snapshot():
         return denied
     now_epoch = time.time()
     with db_connect() as db:
+        rollover_monthly_traffic(db)
         expire_stale_outbound(db)
         devices = [dict(row) for row in db.execute(
             "SELECT * FROM devices ORDER BY last_seen DESC"

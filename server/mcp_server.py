@@ -5,7 +5,7 @@ from datetime import datetime
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-from app import OFFLINE_SECONDS, db_connect, queue_outbound_sms
+from app import OFFLINE_SECONDS, db_connect, queue_outbound_sms, rollover_monthly_traffic
 
 
 READ_ONLY = ToolAnnotations(
@@ -127,10 +127,13 @@ def list_devices(online_only: bool = False, limit: int = 100) -> dict:
     limit = _bounded_limit(limit, default=100)
     now_epoch = time.time()
     with db_connect() as db:
+        rollover_monthly_traffic(db)
         rows = db.execute(
             """
             SELECT id, name, phone_number, firmware, app_version, network,
-                   signal, queue_count, first_seen, last_seen, status_message
+                   signal, queue_count, first_seen, last_seen, status_message,
+                   traffic_month, traffic_month_bytes, traffic_updated_at,
+                   traffic_total_bytes
             FROM devices
             ORDER BY last_seen DESC
             LIMIT ?

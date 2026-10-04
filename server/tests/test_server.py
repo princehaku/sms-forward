@@ -133,6 +133,265 @@ class SmsCenterTest(unittest.TestCase):
         self.assertEqual(device["traffic_session_bytes"], 512)
         self.assertTrue(device["traffic_updated_at"])
 
+    def _monthly_traffic_fixture(self, name, now="2026-09-30T15:59:59+00:00"):
+        original_path = self.module.DATABASE_PATH
+        self.module.DATABASE_PATH = Path(self.temp_dir.name) / f"traffic-{name}.db"
+        self.addCleanup(setattr, self.module, "DATABASE_PATH", original_path)
+        with patch.object(self.module, "utc_now", return_value=now):
+            self.module.init_db()
+        return {"X-SMS-Admin-Token": "admin-test"}, f"dev-traffic-{name}"
+
+    def _monthly_traffic_report(self, device_id, now, **counters):
+        payload = {"token": "sms-sb", "device_id": device_id}
+        payload.update(counters)
+        with patch.object(self.module, "utc_now", return_value=now):
+            response = self.client.post("/api/device/heartbeat", json=payload)
+        self.assertEqual(response.status_code, 200, response.json)
+
+    def _monthly_traffic_snapshot(self, headers, device_id, now):
+        with patch.object(self.module, "utc_now", return_value=now):
+            response = self.client.get("/api/admin/snapshot", headers=headers)
+        self.assertEqual(response.status_code, 200, response.json)
+        return next(item for item in response.json["devices"] if item["id"] == device_id)
+
+    def test_traffic_month_key_uses_shanghai_calendar_boundary(self):
+        cases = (
+            ("2026-09-30T15:59:59+00:00", "2026-09"),
+            ("2026-09-30T16:00:00+00:00", "2026-10"),
+            ("2026-10-01T00:00:00+08:00", "2026-10"),
+            ("2026-09-30T16:00:00", "2026-10"),
+            ("2026-12-31T16:00:00+00:00", "2027-01"),
+        )
+        for now, expected in cases:
+            with self.subTest(now=now):
+                with patch.object(self.module, "utc_now", return_value=now):
+                    self.assertEqual(self.module.traffic_month_key(), expected)
+
+    def test_monthly_traffic_counts_positive_deltas_and_new_sessions(self):
+        headers, device_id = self._monthly_traffic_fixture("deltas")
+        now = "2026-09-30T15:59:59+00:00"
+        for session_id, session_bytes in (
+            ("first", 1024),
+            ("first", 3072),
+            ("first", 3072),
+            ("first", 2048),
+            ("restarted", 512),
+        ):
+            self._monthly_traffic_report(
+                device_id, now,
+                traffic_session_id=session_id, traffic_session_bytes=session_bytes,
+            )
+        self._monthly_traffic_report(device_id, now)
+        device = self._monthly_traffic_snapshot(headers, device_id, now)
+        self.assertEqual(device["traffic_month"], "2026-09")
+        self.assertEqual(device["traffic_month_bytes"], 3584)
+        self.assertEqual(device["traffic_total_bytes"], 3584)
+        self.assertEqual(device["traffic_session_id"], "restarted")
+        self.assertEqual(device["traffic_session_bytes"], 512)
+
+    def test_monthly_traffic_rollover_preserves_session_high_water_mark(self):
+        headers, device_id = self._monthly_traffic_fixture("rollover")
+        previous = "2026-09-30T15:59:59+00:00"
+        current = "2026-09-30T16:00:00+00:00"
+        self._monthly_traffic_report(
+            device_id, previous,
+            traffic_session_id="long-running", traffic_session_bytes=4000,
+        )
+        # Heartbeat receipt time chooses the month. A device-provided month
+        # cannot move accepted usage into an earlier calendar bucket.
+        self._monthly_traffic_report(
+            device_id, current,
+            traffic_session_id="long-running", traffic_session_bytes=4500,
+            traffic_month="2026-08",
+        )
+        device = self._monthly_traffic_snapshot(headers, device_id, current)
+        self.assertEqual(device["traffic_month"], "2026-10")
+        self.assertEqual(device["traffic_month_bytes"], 500)
+        self.assertEqual(device["traffic_total_bytes"], 4500)
+        self.assertEqual(device["traffic_session_bytes"], 4500)
+
+    def test_monthly_traffic_rollover_ignores_duplicates_and_missing_counters(self):
+        headers, device_id = self._monthly_traffic_fixture("rollover-duplicates")
+        previous = "2026-09-30T15:59:59+00:00"
+        current = "2026-09-30T16:00:00+00:00"
+        self._monthly_traffic_report(
+            device_id, previous,
+            traffic_session_id="same-session", traffic_session_bytes=4000,
+        )
+        for session_bytes in (4000, 3500):
+            self._monthly_traffic_report(
+                device_id, current,
+                traffic_session_id="same-session", traffic_session_bytes=session_bytes,
+            )
+        self._monthly_traffic_report(device_id, current)
+        device = self._monthly_traffic_snapshot(headers, device_id, current)
+        self.assertEqual(device["traffic_month_bytes"], 0)
+        self.assertEqual(device["traffic_total_bytes"], 4000)
+        self.assertEqual(device["traffic_session_id"], "same-session")
+        self.assertEqual(device["traffic_session_bytes"], 4000)
+        self._monthly_traffic_report(
+            device_id, current,
+            traffic_session_id="same-session", traffic_session_bytes=4500,
+        )
+        self._monthly_traffic_report(
+            device_id, current,
+            traffic_session_id="new-session", traffic_session_bytes=256,
+        )
+        device = self._monthly_traffic_snapshot(headers, device_id, current)
+        self.assertEqual(device["traffic_month_bytes"], 756)
+        self.assertEqual(device["traffic_total_bytes"], 4756)
+        self.assertEqual(device["traffic_session_bytes"], 256)
+
+    def test_monthly_traffic_delayed_previous_month_request_cannot_rollback_month(self):
+        headers, device_id = self._monthly_traffic_fixture("delayed-month")
+        previous = "2026-09-30T15:59:59+00:00"
+        current = "2026-09-30T16:00:00+00:00"
+        self._monthly_traffic_report(
+            device_id, previous,
+            traffic_session_id="persistent-session", traffic_session_bytes=4000,
+        )
+        self._monthly_traffic_report(
+            device_id, current,
+            traffic_session_id="persistent-session", traffic_session_bytes=4500,
+        )
+        # A request may capture September's receipt time before it acquires
+        # SQLite's write lock after another request has advanced to October.
+        self._monthly_traffic_report(
+            device_id, previous,
+            traffic_session_id="persistent-session", traffic_session_bytes=4800,
+        )
+        device = self._monthly_traffic_snapshot(headers, device_id, previous)
+        self.assertEqual(device["traffic_month"], "2026-10")
+        self.assertEqual(device["traffic_month_bytes"], 500)
+        self.assertEqual(device["traffic_total_bytes"], 4800)
+        self.assertEqual(device["traffic_session_bytes"], 4800)
+        self._monthly_traffic_report(
+            device_id, current,
+            traffic_session_id="persistent-session", traffic_session_bytes=4900,
+        )
+        device = self._monthly_traffic_snapshot(headers, device_id, current)
+        self.assertEqual(device["traffic_month_bytes"], 600)
+        self.assertEqual(device["traffic_total_bytes"], 4900)
+
+    def test_monthly_traffic_snapshot_resets_offline_devices_without_a_heartbeat(self):
+        headers, device_id = self._monthly_traffic_fixture("offline-snapshot")
+        self._monthly_traffic_report(
+            device_id, "2026-09-30T15:59:59+00:00",
+            traffic_session_id="offline-session", traffic_session_bytes=4096,
+        )
+        with self.module.db_connect() as db:
+            db.execute("UPDATE devices SET last_seen='2000-01-01T00:00:00+00:00' WHERE id=?", (device_id,))
+        device = self._monthly_traffic_snapshot(
+            headers, device_id, "2026-09-30T16:00:00+00:00"
+        )
+        self.assertFalse(device["online"])
+        self.assertEqual(device["traffic_month"], "2026-10")
+        self.assertEqual(device["traffic_month_bytes"], 0)
+        self.assertEqual(device["traffic_total_bytes"], 4096)
+        self.assertEqual(device["traffic_session_bytes"], 4096)
+        with self.module.db_connect() as db:
+            persisted = db.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
+        self.assertEqual(persisted["traffic_month"], "2026-10")
+        self.assertEqual(persisted["traffic_month_bytes"], 0)
+
+    def test_monthly_traffic_mcp_resets_offline_devices_and_exposes_current_usage(self):
+        _, device_id = self._monthly_traffic_fixture("offline-mcp")
+        self._monthly_traffic_report(
+            device_id, "2026-09-30T15:59:59+00:00",
+            traffic_session_id="offline-session", traffic_session_bytes=2048,
+        )
+        with self.module.db_connect() as db:
+            db.execute("UPDATE devices SET last_seen='2000-01-01T00:00:00+00:00' WHERE id=?", (device_id,))
+        with patch.object(self.module, "utc_now", return_value="2026-09-30T16:00:00+00:00"):
+            result = self.mcp_module.list_devices()
+        device = next(item for item in result["devices"] if item["id"] == device_id)
+        self.assertFalse(device["online"])
+        self.assertEqual(device["traffic_month"], "2026-10")
+        self.assertEqual(device["traffic_month_bytes"], 0)
+        self.assertEqual(device["traffic_total_bytes"], 2048)
+        self._monthly_traffic_report(
+            device_id, "2026-10-01T01:00:00+00:00",
+            traffic_session_id="offline-session", traffic_session_bytes=2304,
+        )
+        with patch.object(self.module, "utc_now", return_value="2026-10-01T01:00:00+00:00"):
+            result = self.mcp_module.list_devices()
+        device = next(item for item in result["devices"] if item["id"] == device_id)
+        self.assertEqual(device["traffic_month_bytes"], 256)
+
+    def test_monthly_traffic_server_restart_keeps_current_month_and_baseline(self):
+        headers, device_id = self._monthly_traffic_fixture("restart")
+        now = "2026-09-30T15:59:59+00:00"
+        self._monthly_traffic_report(
+            device_id, now,
+            traffic_session_id="persistent-session", traffic_session_bytes=1024,
+        )
+        with patch.object(self.module, "utc_now", return_value=now):
+            self.module.init_db()
+            self.module.init_db()
+        device = self._monthly_traffic_snapshot(headers, device_id, now)
+        self.assertEqual(device["traffic_month_bytes"], 1024)
+        self.assertEqual(device["traffic_total_bytes"], 1024)
+        self.assertEqual(device["traffic_session_bytes"], 1024)
+        self._monthly_traffic_report(
+            device_id, now,
+            traffic_session_id="persistent-session", traffic_session_bytes=1536,
+        )
+        device = self._monthly_traffic_snapshot(headers, device_id, now)
+        self.assertEqual(device["traffic_month_bytes"], 1536)
+        self.assertEqual(device["traffic_total_bytes"], 1536)
+
+    def test_monthly_traffic_migration_starts_at_zero_and_preserves_legacy_baseline(self):
+        original_path = self.module.DATABASE_PATH
+        self.module.DATABASE_PATH = Path(self.temp_dir.name) / "traffic-legacy.db"
+        self.addCleanup(setattr, self.module, "DATABASE_PATH", original_path)
+        device_id = "dev-traffic-legacy"
+        with sqlite3.connect(self.module.DATABASE_PATH) as db:
+            db.execute("""
+                CREATE TABLE devices (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL DEFAULT '',
+                    phone_number TEXT NOT NULL DEFAULT '',
+                    firmware TEXT NOT NULL DEFAULT '',
+                    app_version TEXT NOT NULL DEFAULT '',
+                    network TEXT NOT NULL DEFAULT '',
+                    signal INTEGER,
+                    queue_count INTEGER NOT NULL DEFAULT 0,
+                    traffic_total_bytes INTEGER NOT NULL DEFAULT 0,
+                    traffic_session_id TEXT NOT NULL DEFAULT '',
+                    traffic_session_bytes INTEGER NOT NULL DEFAULT 0,
+                    traffic_updated_at TEXT NOT NULL DEFAULT '',
+                    first_seen TEXT NOT NULL,
+                    last_seen TEXT NOT NULL,
+                    last_ip TEXT NOT NULL DEFAULT '',
+                    status_message TEXT NOT NULL DEFAULT ''
+                )
+            """)
+            db.execute("""
+                INSERT INTO devices (
+                    id, name, traffic_total_bytes, traffic_session_id,
+                    traffic_session_bytes, traffic_updated_at, first_seen, last_seen
+                ) VALUES (?, 'legacy board', 9000, 'legacy-session', 4000, ?, ?, ?)
+            """, (device_id,) + ("2026-10-01T00:00:00+00:00",) * 3)
+        now = "2026-10-02T00:00:00+00:00"
+        with patch.object(self.module, "utc_now", return_value=now):
+            self.module.init_db()
+        headers = {"X-SMS-Admin-Token": "admin-test"}
+        device = self._monthly_traffic_snapshot(headers, device_id, now)
+        self.assertEqual(device["name"], "legacy board")
+        self.assertEqual(device["traffic_month"], "2026-10")
+        self.assertEqual(device["traffic_month_bytes"], 0)
+        self.assertEqual(device["traffic_total_bytes"], 9000)
+        self.assertEqual(device["traffic_session_id"], "legacy-session")
+        self.assertEqual(device["traffic_session_bytes"], 4000)
+        self.assertEqual(device["traffic_updated_at"], "2026-10-01T00:00:00+00:00")
+        self._monthly_traffic_report(
+            device_id, now,
+            traffic_session_id="legacy-session", traffic_session_bytes=4500,
+        )
+        device = self._monthly_traffic_snapshot(headers, device_id, now)
+        self.assertEqual(device["traffic_month_bytes"], 500)
+        self.assertEqual(device["traffic_total_bytes"], 9500)
+
     def test_idempotent_message_and_routing(self):
         headers = {"X-SMS-Admin-Token": "admin-test"}
         destination = self.client.post(
@@ -1265,6 +1524,8 @@ class SmsCenterTest(unittest.TestCase):
             self.assertIn("traffic_session_id", device_columns)
             self.assertIn("traffic_session_bytes", device_columns)
             self.assertIn("traffic_updated_at", device_columns)
+            self.assertIn("traffic_month", device_columns)
+            self.assertIn("traffic_month_bytes", device_columns)
             self.assertIsNotNone(default_template)
             self.assertIn("{{ori}}", default_template["body"])
         finally:
@@ -2388,8 +2649,11 @@ class SmsCenterTest(unittest.TestCase):
         self.assertNotIn("'呼入时间','挂断时间','响铃时长'", console)
         self.assertIn("脚本：${esc(d.app_version||'未上报')}", console)
         self.assertIn("固件：${esc(d.firmware||'未上报')}", console)
+        self.assertIn("本月估算流量", console)
+        self.assertIn("trafficCell(d)", console)
+        self.assertIn("device.traffic_month_bytes", console)
         self.assertIn("累计估算流量", console)
-        self.assertIn("trafficKb(d.traffic_total_bytes)", console)
+        self.assertIn("device.traffic_total_bytes", console)
 
     def test_mcp_token_lifecycle_and_storage(self):
         headers = {"X-SMS-Admin-Token": "admin-test"}
